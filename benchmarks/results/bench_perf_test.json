@@ -1,0 +1,94 @@
+{
+  "python": {
+    "version": "3.12.9",
+    "implementation": "CPython",
+    "build": "main",
+    "compiler": "Clang 16.0.0 (clang-1600.0.26.6)",
+    "arch": "arm64",
+    "gil_disabled": false
+  },
+  "throughput": {
+    "32": {
+      "fast_cache": 12822156.712211879,
+      "lru_cache": 19066838.388641227
+    },
+    "64": {
+      "fast_cache": 13402280.021351445,
+      "lru_cache": 21207972.191766735
+    },
+    "128": {
+      "fast_cache": 14090131.182621641,
+      "lru_cache": 24097593.224030606
+    },
+    "256": {
+      "fast_cache": 14622732.81993702,
+      "lru_cache": 27449587.456561457
+    },
+    "512": {
+      "fast_cache": 17238653.85558022,
+      "lru_cache": 32661507.840447053
+    },
+    "1024": {
+      "fast_cache": 17417178.767218716,
+      "lru_cache": 36530787.93597052
+    }
+  },
+  "threading": {
+    "1": {
+      "fast_cache": 15348605.154510036,
+      "lru_cache": 9897682.694595613
+    },
+    "2": {
+      "fast_cache": 14461665.21879856,
+      "lru_cache": 10031893.421193613
+    },
+    "4": {
+      "fast_cache": 15218383.795245877,
+      "lru_cache": 9442388.257813832
+    },
+    "8": {
+      "fast_cache": 15527448.796966495,
+      "lru_cache": 10113864.933091491
+    },
+    "16": {
+      "fast_cache": 15591099.080845982,
+      "lru_cache": 9403578.054758623
+    },
+    "32": {
+      "fast_cache": 14465411.925485857,
+      "lru_cache": 9379030.353846923
+    }
+  },
+  "shared_throughput": {
+    "memory": {
+      "ops_per_sec": 14439042.425839456,
+      "hit_rate": 0.6492
+    },
+    "shared": {
+      "ops_per_sec": 2756162.268104078,
+      "hit_rate": 0.6492
+    }
+  },
+  "multiprocess": {
+    "1": {
+      "total_ops_per_sec": 2289040.588441179,
+      "per_process_avg_ops_per_sec": 3060469.522058054,
+      "wall_time": 0.21843212502426468
+    },
+    "2": {
+      "total_ops_per_sec": 167250.60123514832,
+      "per_process_avg_ops_per_sec": 84539.2184667449,
+      "wall_time": 2.98952587498934
+    },
+    "4": {
+      "total_ops_per_sec": 122304.62893978224,
+      "per_process_avg_ops_per_sec": 30728.17824523134,
+      "wall_time": 4.088152707990957
+    },
+    "8": {
+      "total_ops_per_sec": 116384.68773514514,
+      "per_process_avg_ops_per_sec": 14602.230670399847,
+      "wall_time": 4.29609779198654
+    }
+  }
+}

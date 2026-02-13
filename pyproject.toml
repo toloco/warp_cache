@@ -1,0 +1,59 @@
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "fast_cache"
+version = "0.1.0"
+description = "Thread-safe Python caching decorator backed by a Rust extension"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.9"
+keywords = ["cache", "lru", "ttl", "thread-safe", "rust"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Rust",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.4",
+    "maturin>=1.0",
+    "matplotlib>=3.8",
+    "cachetools>=6.2.6",
+    "cachebox>=4.0",
+    "moka-py>=0.3",
+    "zoocache>=0.1; python_version >= '3.10'",
+]
+
+[project.urls]
+Repository = "https://github.com/tolo/fast_cache"
+
+[tool.maturin]
+features = ["pyo3/extension-module"]
+module-name = "fast_cache._fast_cache_rs"
+
+[tool.ruff]
+target-version = "py39"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM"]
+
+[tool.ruff.lint.per-file-ignores]
+"benchmarks/*" = ["B023"]
+"tests/*" = ["B023"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

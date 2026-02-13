@@ -1,0 +1,128 @@
+{
+  "python": {
+    "version": "3.13.2",
+    "implementation": "CPython",
+    "build": "main",
+    "compiler": "Clang 20.1.0 ",
+    "arch": "arm64",
+    "gil_disabled": true
+  },
+  "throughput": {
+    "32": {
+      "fast_cache": 10307950.001573805,
+      "lru_cache": 13844024.63655613
+    },
+    "64": {
+      "fast_cache": 11896795.33452331,
+      "lru_cache": 16144656.153066864
+    },
+    "128": {
+      "fast_cache": 13325707.514261961,
+      "lru_cache": 18804503.64505312
+    },
+    "256": {
+      "fast_cache": 14967447.347976612,
+      "lru_cache": 21625516.45584995
+    },
+    "512": {
+      "fast_cache": 16382251.670958292,
+      "lru_cache": 24744818.9964282
+    },
+    "1024": {
+      "fast_cache": 17255385.913743697,
+      "lru_cache": 27666979.316649716
+    }
+  },
+  "threading": {
+    "1": {
+      "fast_cache": 13528521.021959977,
+      "lru_cache": 9487028.76749948
+    },
+    "2": {
+      "fast_cache": 13838037.954901878,
+      "lru_cache": 9521580.569802156
+    },
+    "4": {
+      "fast_cache": 13781855.53882191,
+      "lru_cache": 9317385.075925348
+    },
+    "8": {
+      "fast_cache": 13675292.204533748,
+      "lru_cache": 9097318.567174971
+    },
+    "16": {
+      "fast_cache": 12950222.616624916,
+      "lru_cache": 8635268.369295863
+    },
+    "32": {
+      "fast_cache": 12004922.95312103,
+      "lru_cache": 8393750.852786908
+    }
+  },
+  "shared_throughput": {
+    "memory": {
+      "ops_per_sec": 14453824.662565406,
+      "hit_rate": 0.6492
+    },
+    "shared": {
+      "ops_per_sec": 2142019.4460900887,
+      "hit_rate": 0.6496275
+    }
+  },
+  "multiprocess": {
+    "1": {
+      "total_ops_per_sec": 1687691.5567833926,
+      "per_process_avg_ops_per_sec": 2187820.7633191957,
+      "wall_time": 0.2962626660009846
+    },
+    "2": {
+      "total_ops_per_sec": 173108.37056168262,
+      "per_process_avg_ops_per_sec": 87640.64277917013,
+      "wall_time": 2.8883640830172226
+    },
+    "4": {
+      "total_ops_per_sec": 123084.39903445158,
+      "per_process_avg_ops_per_sec": 30944.224274523567,
+      "wall_time": 4.062253249983769
+    },
+    "8": {
+      "total_ops_per_sec": 114436.87668943508,
+      "per_process_avg_ops_per_sec": 14363.072127828173,
+      "wall_time": 4.369220958004007
+    }
+  },
+  "sustained": {
+    "fast_cache": {
+      "ops": 64576132,
+      "elapsed": 10.0,
+      "ops_per_sec": 6457613.2
+    },
+    "lru_cache": {
+      "ops": 79526032,
+      "elapsed": 9.999999624997145,
+      "ops_per_sec": 7952603.498224902
+    }
+  },
+  "ttl": {
+    "0.001": {
+      "ops_per_sec": 6204009.725440967,
+      "hit_rate": 0.6477932328184465
+    },
+    "0.01": {
+      "ops_per_sec": 6209478.855238154,
+      "hit_rate": 0.650468033653131
+    },
+    "0.1": {
+      "ops_per_sec": 6182639.728602045,
+      "hit_rate": 0.6506113990535692
+    },
+    "1.0": {
+      "ops_per_sec": 6226239.455657172,
+      "hit_rate": 0.6506210418221477
+    },
+    "None": {
+      "ops_per_sec": 6585721.854664207,
+      "hit_rate": 0.6506237175095978
+    }
+  }
+}

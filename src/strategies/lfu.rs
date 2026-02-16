@@ -87,9 +87,13 @@ impl EvictionStrategy for LfuStrategy {
         self.map.insert(key, (entry, fk));
     }
 
-    fn get_mut(&mut self, key: &CacheKey) -> Option<&mut CacheEntry> {
+    fn peek(&self, key: &CacheKey) -> Option<&CacheEntry> {
+        self.map.get(key).map(|(entry, _)| entry)
+    }
+
+    fn record_access(&mut self, key: &CacheKey) {
         if !self.map.contains_key(key) {
-            return None;
+            return;
         }
 
         // Remove old index entry
@@ -111,8 +115,6 @@ impl EvictionStrategy for LfuStrategy {
         };
         self.index.insert(new_fk.clone());
         *stored_fk = new_fk;
-
-        Some(&mut self.map.get_mut(key).unwrap().0)
     }
 
     fn remove(&mut self, key: &CacheKey) -> Option<CacheEntry> {

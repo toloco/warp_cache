@@ -187,7 +187,7 @@ pub unsafe fn on_insert(
     strategy: u32,
 ) {
     match strategy {
-        0 | 1 | 2 => {
+        0..=2 => {
             // LRU/MRU/FIFO: append to tail
             list_push_tail(header, slab_base, slot_size, index);
         }

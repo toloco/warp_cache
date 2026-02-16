@@ -8,7 +8,7 @@
     "gil_disabled": false
   },
   "contestants": {
-    "fast_cache": {
+    "warp_cache": {
       "version": "0.1.0",
       "available": true,
       "thread_safe": true
@@ -41,208 +41,208 @@
   },
   "throughput": {
     "32": {
-      "fast_cache": 11230539.177552134,
-      "lru_cache": 17583450.158747625,
-      "cachetools": 575369.7159072361,
-      "cachebox": 1058280.8494261177,
-      "moka_py": 2957147.238922873
+      "warp_cache": 12352414.971597569,
+      "lru_cache": 22233956.850446213,
+      "cachetools": 610467.534122101,
+      "cachebox": 1113122.4610786464,
+      "moka_py": 3134169.893431337
     },
     "64": {
-      "fast_cache": 14597385.128739487,
-      "lru_cache": 22245495.955552228,
-      "cachetools": 615186.4913008646,
-      "cachebox": 1124704.4135146076,
-      "moka_py": 3253862.3026922094
+      "warp_cache": 13475349.103617344,
+      "lru_cache": 23286503.453239903,
+      "cachetools": 653834.0829331132,
+      "cachebox": 1203292.8059992965,
+      "moka_py": 3371899.4324789005
     },
     "128": {
-      "fast_cache": 15664263.429109257,
-      "lru_cache": 25884103.77209069,
-      "cachetools": 708290.7513926441,
-      "cachebox": 1239275.0962380993,
-      "moka_py": 3431164.4079610053
+      "warp_cache": 14206058.78467234,
+      "lru_cache": 26763908.753132906,
+      "cachetools": 717456.1841536523,
+      "cachebox": 1296843.7461910115,
+      "moka_py": 3594433.9770229016
     },
     "256": {
-      "fast_cache": 17234200.431715995,
-      "lru_cache": 29280793.52713645,
-      "cachetools": 807275.4309662953,
-      "cachebox": 1473117.4483310378,
-      "moka_py": 3659233.848256029
+      "warp_cache": 16349331.48283123,
+      "lru_cache": 29770029.25057609,
+      "cachetools": 832745.7826327819,
+      "cachebox": 1555663.5877266105,
+      "moka_py": 3869844.293444283
     },
     "512": {
-      "fast_cache": 20362795.81964264,
-      "lru_cache": 35970148.912420765,
-      "cachetools": 914935.0568413284,
-      "cachebox": 1753527.1667831389,
-      "moka_py": 4005166.663306078
+      "warp_cache": 17662514.526063785,
+      "lru_cache": 35705792.471365936,
+      "cachetools": 960047.618366815,
+      "cachebox": 1864775.7838068868,
+      "moka_py": 4152263.507916348
     },
     "1024": {
-      "fast_cache": 20049289.165012054,
-      "lru_cache": 39286942.02441505,
-      "cachetools": 1119136.776991818,
-      "cachebox": 2336184.7944620014,
-      "moka_py": 4429351.774733529
+      "warp_cache": 17705382.46385588,
+      "lru_cache": 39778560.89193567,
+      "cachetools": 1184043.2414671388,
+      "cachebox": 2538425.413099043,
+      "moka_py": 4634994.201815519
     },
     "zoocache_unbounded": {
-      "zoocache": 1181805.5084804124
+      "zoocache": 1230519.9612073838
     }
   },
   "threading": {
     "1": {
-      "fast_cache": 17440085.018930048,
-      "lru_cache": 11930207.341742313,
-      "cachetools": 767093.4815632366,
-      "cachebox": 1470501.73517787,
-      "moka_py": 3591335.990641877
+      "warp_cache": 15923883.83406775,
+      "lru_cache": 12931382.935751123,
+      "cachetools": 809012.6728557326,
+      "cachebox": 1564349.5264307323,
+      "moka_py": 3783955.0792567763
     },
     "2": {
-      "fast_cache": 17269913.389870413,
-      "lru_cache": 12009908.672337899,
-      "cachetools": 783331.4892568078,
-      "cachebox": 1474156.1920192814,
-      "moka_py": 3622308.0277670454
+      "warp_cache": 15625305.223516554,
+      "lru_cache": 12666111.31268338,
+      "cachetools": 810206.9876311185,
+      "cachebox": 1575282.7546564941,
+      "moka_py": 3815143.481721434
     },
     "4": {
-      "fast_cache": 17276005.83748414,
-      "lru_cache": 12081854.586114407,
-      "cachetools": 789177.2234650401,
-      "cachebox": 1487129.8208024958,
-      "moka_py": 3557901.178237872
+      "warp_cache": 15648942.953675942,
+      "lru_cache": 12645489.513865111,
+      "cachetools": 821301.5528605815,
+      "cachebox": 1569116.645568113,
+      "moka_py": 3747809.8779774494
     },
     "8": {
-      "fast_cache": 16967845.937975887,
-      "lru_cache": 12017064.224034505,
-      "cachetools": 792452.9444979322,
-      "cachebox": 1489428.78660251,
-      "moka_py": 3563638.4583883416
+      "warp_cache": 16407114.282065291,
+      "lru_cache": 12624867.770588709,
+      "cachetools": 809833.2676364055,
+      "cachebox": 1555429.6725932139,
+      "moka_py": 3788871.495086888
     },
     "16": {
-      "fast_cache": 16917133.330934916,
-      "lru_cache": 11727110.146823138,
-      "cachetools": 780379.9494543468,
-      "cachebox": 1424644.3349061608,
-      "moka_py": 3650551.0053600525
+      "warp_cache": 16115170.639804067,
+      "lru_cache": 12138990.91022189,
+      "cachetools": 801056.8629760018,
+      "cachebox": 1502912.8408262234,
+      "moka_py": 3765326.0476977867
     },
     "32": {
-      "fast_cache": 16177957.516651994,
-      "lru_cache": 11422154.143389875,
-      "cachetools": 765835.0742107026,
-      "cachebox": 1379070.9953161078,
-      "moka_py": 3651434.100026092
+      "warp_cache": 14916374.403640026,
+      "lru_cache": 11915342.486586954,
+      "cachetools": 796023.8607494867,
+      "cachebox": 1470335.963362468,
+      "moka_py": 3798724.576692935
     }
   },
   "shared_throughput": {
     "memory": {
-      "ops_per_sec": 17108519.812971983,
+      "ops_per_sec": 15042212.933356386,
       "hit_rate": 0.6492
     },
     "shared": {
-      "ops_per_sec": 1698906.9657147408,
-      "hit_rate": 0.6496275
+      "ops_per_sec": 7765658.514843385,
+      "hit_rate": 0.6492
     }
   },
   "multiprocess": {
     "1": {
-      "total_ops_per_sec": 1617986.1815702526,
-      "per_process_avg_ops_per_sec": 1945300.7344723076,
-      "wall_time": 0.30902612500358373
+      "total_ops_per_sec": 4459267.367846826,
+      "per_process_avg_ops_per_sec": 8652121.917279249,
+      "wall_time": 0.11212604196043685
     },
     "2": {
-      "total_ops_per_sec": 170718.48496163642,
-      "per_process_avg_ops_per_sec": 86175.36950192117,
-      "wall_time": 2.9287982500100043
+      "total_ops_per_sec": 5307996.498230579,
+      "per_process_avg_ops_per_sec": 3800395.6772100087,
+      "wall_time": 0.09419749997323379
     },
     "4": {
-      "total_ops_per_sec": 124635.98760455991,
-      "per_process_avg_ops_per_sec": 31299.88924315288,
-      "wall_time": 4.0116824170108885
+      "total_ops_per_sec": 3083303.143084901,
+      "per_process_avg_ops_per_sec": 882747.5873254753,
+      "wall_time": 0.16216374997748062
     },
     "8": {
-      "total_ops_per_sec": 118117.88599982056,
-      "per_process_avg_ops_per_sec": 14830.374837202515,
-      "wall_time": 4.233059165999293
+      "total_ops_per_sec": 1876757.698726587,
+      "per_process_avg_ops_per_sec": 268625.65680487,
+      "wall_time": 0.26641691697295755
     }
   },
   "sustained": {
-    "fast_cache": {
-      "ops": 78216709,
-      "elapsed": 10.000001332984539,
-      "ops_per_sec": 7821669.857383502
+    "warp_cache": {
+      "ops": 77110674,
+      "elapsed": 10.000002957996912,
+      "ops_per_sec": 7711065.119069318
     },
     "lru_cache": {
-      "ops": 103190358,
-      "elapsed": 10.000001625012374,
-      "ops_per_sec": 10319034.123144187
+      "ops": 106618865,
+      "elapsed": 10.000001500011422,
+      "ops_per_sec": 10661884.900705088
     },
     "cachetools": {
-      "ops": 7518305,
-      "elapsed": 10.000001291977242,
-      "ops_per_sec": 751830.402865223
+      "ops": 7570624,
+      "elapsed": 9.99999983300222,
+      "ops_per_sec": 757062.4126427742
     },
     "cachebox": {
-      "ops": 12415049,
-      "elapsed": 10.000001000007614,
-      "ops_per_sec": 1241504.775848577
+      "ops": 12673297,
+      "elapsed": 10.000000875035767,
+      "ops_per_sec": 1267329.589104128
     },
     "moka_py": {
-      "ops": 27980455,
-      "elapsed": 9.9999997089908,
-      "ops_per_sec": 2798045.581425701
+      "ops": 28854529,
+      "elapsed": 10.000002417014912,
+      "ops_per_sec": 2885452.2025818997
     }
   },
   "ttl": {
     "0.001": {
-      "fast_cache": {
-        "ops_per_sec": 7266659.189360285
+      "warp_cache": {
+        "ops_per_sec": 6822740.218517492
       },
       "cachetools": {
-        "ops_per_sec": 605905.533376473
+        "ops_per_sec": 602264.1147183313
       },
       "moka_py": {
-        "ops_per_sec": 2565893.9547508503
+        "ops_per_sec": 2632375.622110285
       }
     },
     "0.01": {
-      "fast_cache": {
-        "ops_per_sec": 7274827.690936038
+      "warp_cache": {
+        "ops_per_sec": 6759868.2
       },
       "cachetools": {
-        "ops_per_sec": 525173.789024151
+        "ops_per_sec": 531523.5560079966
       },
       "moka_py": {
-        "ops_per_sec": 2669152.6332706762
+        "ops_per_sec": 2757155.33445668
       }
     },
     "0.1": {
-      "fast_cache": {
-        "ops_per_sec": 7259774.051006986
+      "warp_cache": {
+        "ops_per_sec": 6722580.852079136
       },
       "cachetools": {
-        "ops_per_sec": 542164.8892908539
+        "ops_per_sec": 535915.9972674276
       },
       "moka_py": {
-        "ops_per_sec": 2736518.180646852
+        "ops_per_sec": 2767979.145950737
       }
     },
     "1.0": {
-      "fast_cache": {
-        "ops_per_sec": 7259901.181498911
+      "warp_cache": {
+        "ops_per_sec": 6707576.923366355
       },
       "cachetools": {
-        "ops_per_sec": 530790.2203808607
+        "ops_per_sec": 526666.6022102998
       },
       "moka_py": {
-        "ops_per_sec": 2740463.4230261296
+        "ops_per_sec": 2732552.911197508
       }
     },
     "None": {
-      "fast_cache": {
-        "ops_per_sec": 7264756.951110632
+      "warp_cache": {
+        "ops_per_sec": 6679999.783481192
       },
       "cachetools": {
-        "ops_per_sec": 528230.504384531
+        "ops_per_sec": 516406.0268759891
       },
       "moka_py": {
-        "ops_per_sec": 2723148.41200904
+        "ops_per_sec": 2721474.5888478886
       }
     }
   }

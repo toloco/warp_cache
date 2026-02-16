@@ -12,12 +12,12 @@ import sys
 import tempfile
 
 import pytest
-from fast_cache._fast_cache_rs import SharedCachedFunction
+from warp_cache._warp_cache_rs import SharedCachedFunction
 
 
 def _cleanup_shm():
     tmpdir = tempfile.gettempdir()
-    shm_dir = os.path.join(tmpdir, "fast_cache")
+    shm_dir = os.path.join(tmpdir, "warp_cache")
     if os.path.isdir(shm_dir):
         for f in glob.glob(os.path.join(shm_dir, "*")):
             with contextlib.suppress(OSError):

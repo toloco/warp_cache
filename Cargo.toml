@@ -1,14 +1,14 @@
 [package]
-name = "fast_cache_rs"
+name = "warp_cache_rs"
 version = "0.1.0"
 edition = "2021"
 
 [lib]
-name = "_fast_cache_rs"
+name = "_warp_cache_rs"
 crate-type = ["cdylib"]
 
 [dependencies]
-pyo3 = { version = "0.28", features = ["extension-module"] }
+pyo3 = { version = "0.28.1", features = ["extension-module"] }
 parking_lot = "0.12"
 hashlink = "0.9"
 

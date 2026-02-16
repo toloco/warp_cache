@@ -2,21 +2,37 @@
 ///
 /// Provides `ShmCache` — a cross-process LRU/MRU/FIFO/LFU cache backed
 /// by mmap. All data (header, hash table, slab arena) lives in a single
-/// memory-mapped file. A separate mmap file holds the POSIX rwlock.
+/// memory-mapped file. A separate mmap file holds the seqlock.
+///
+/// Read path uses an optimistic seqlock: lock-free hash lookup + value copy,
+/// then a brief write lock only when ordering updates are needed (LRU/MRU/LFU).
+/// FIFO reads are fully lock-free. Stats are updated via atomics (no lock).
 pub mod hashtable;
 pub mod layout;
 pub mod lock;
 pub mod ordering;
 pub mod region;
 
-use layout::{Header, SlotHeader, SLOT_HEADER_SIZE, SLOT_NONE};
-use lock::ShmRwLock;
+use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
+
+use layout::{Bucket, Header, SlotHeader, BUCKET_EMPTY, SLOT_HEADER_SIZE, SLOT_NONE};
+use lock::ShmSeqLock;
 use region::ShmRegion;
 
 /// Result of a cache get operation.
 pub enum ShmGetResult {
     Hit(Vec<u8>),
     Miss,
+}
+
+/// Result of the optimistic (lock-free) read phase.
+enum OptimisticResult {
+    /// Cache hit — value bytes copied, slot_index for ordering update.
+    Hit { value: Vec<u8>, slot_index: i32 },
+    /// Key not found.
+    Miss,
+    /// Entry found but TTL expired — slot_index for cleanup.
+    Expired { slot_index: i32 },
 }
 
 /// The main shared-memory cache handle.
@@ -61,7 +77,7 @@ impl ShmCache {
         })
     }
 
-    fn lock(&self) -> ShmRwLock {
+    fn lock(&self) -> ShmSeqLock {
         self.region.lock()
     }
 
@@ -70,8 +86,13 @@ impl ShmCache {
     }
 
     /// Get the mutable header pointer. Caller must hold write lock.
+    #[allow(clippy::mut_from_ref)]
     unsafe fn header_mut(&self) -> &mut Header {
         &mut *(self.region.base_ptr() as *mut Header)
+    }
+
+    fn base_ptr(&self) -> *const u8 {
+        self.region.base_ptr()
     }
 
     fn ht_base(&self) -> *const u8 {
@@ -92,72 +113,219 @@ impl ShmCache {
         unsafe { (self.region.base_ptr() as *mut u8).add(layout::slab_offset(ht_cap)) }
     }
 
+    // --- Atomic stat accessors (no lock needed) ---
+
+    /// Atomic reference to the `hits` field in the header.
+    #[inline]
+    fn atomic_hits(&self) -> &AtomicU64 {
+        // Header offset of `hits` = 16 (after magic[8] + ttl_nanos[8])
+        unsafe { &*(self.base_ptr().add(16) as *const AtomicU64) }
+    }
+
+    /// Atomic reference to the `misses` field in the header.
+    #[inline]
+    fn atomic_misses(&self) -> &AtomicU64 {
+        // Header offset of `misses` = 24
+        unsafe { &*(self.base_ptr().add(24) as *const AtomicU64) }
+    }
+
+    /// Atomic reference to the `oversize_skips` field in the header.
+    #[inline]
+    fn atomic_oversize_skips(&self) -> &AtomicU64 {
+        // Header offset of `oversize_skips` = 32
+        unsafe { &*(self.base_ptr().add(32) as *const AtomicU64) }
+    }
+
     /// Check if key/value sizes exceed limits. Returns true if oversize.
     pub fn is_oversize(&self, key_bytes: &[u8], value_bytes: &[u8]) -> bool {
         let h = self.header();
         key_bytes.len() > h.max_key_size as usize || value_bytes.len() > h.max_value_size as usize
     }
 
-    /// Look up a key (by hash + serialized bytes). Returns a copy of the value bytes on hit.
+    /// Bounds-checked hash table lookup for the optimistic read path.
     ///
-    /// This acquires a **write lock** so it can update ordering (LRU touch)
-    /// and stats atomically.
-    pub fn get(&self, key_hash: u64, key_bytes: &[u8]) -> ShmGetResult {
-        let lock = self.lock();
-        lock.write_lock();
-        let result = unsafe { self.get_inner(key_hash, key_bytes) };
-        lock.write_unlock();
-        result
-    }
+    /// Mirrors `hashtable::ht_lookup` but adds bounds checks to guard against
+    /// torn reads during a concurrent write (the seqlock will detect the tear,
+    /// but we must not segfault before we get to `read_validate`).
+    ///
+    /// Returns `Some((slot_index, value_bytes))` on hit, `None` on miss.
+    #[inline]
+    #[allow(clippy::too_many_arguments)]
+    unsafe fn ht_lookup_checked(
+        &self,
+        ht_base: *const u8,
+        ht_capacity: u32,
+        slab_base: *const u8,
+        slot_size: u32,
+        capacity: u32,
+        max_data_size: usize,
+        key_hash: u64,
+        key_bytes: &[u8],
+        ttl_nanos: u64,
+    ) -> OptimisticResult {
+        let mask = ht_capacity.wrapping_sub(1);
+        let mut idx = (key_hash as u32) & mask;
 
-    unsafe fn get_inner(&self, key_hash: u64, key_bytes: &[u8]) -> ShmGetResult {
-        let h = self.header();
-        let ht_cap = h.ht_capacity;
-        let slot_size = h.slot_size;
-        let strategy = h.strategy;
-        let ttl_nanos = h.ttl_nanos;
+        for _ in 0..ht_capacity {
+            let bucket = &*(ht_base.add(idx as usize * Bucket::SIZE) as *const Bucket);
 
-        let slot_index = hashtable::ht_lookup(
-            self.ht_base(),
-            ht_cap,
-            self.slab_base(),
-            slot_size,
-            key_hash,
-            key_bytes,
-        );
+            if bucket.slot_index == BUCKET_EMPTY {
+                return OptimisticResult::Miss;
+            }
 
-        match slot_index {
-            Some(idx) => {
-                let slot_ptr = self.slab_base().add(idx as usize * slot_size as usize);
-                let slot = &*(slot_ptr as *const SlotHeader);
+            if bucket.hash == key_hash {
+                let slot_index = bucket.slot_index;
 
-                // Check TTL
-                if ttl_nanos > 0 {
-                    let now = current_time_nanos();
-                    if now.saturating_sub(slot.created_at_nanos) > ttl_nanos {
-                        // Expired — remove and count as miss
-                        self.remove_slot(idx, key_bytes);
-                        let header = self.header_mut();
-                        header.misses += 1;
-                        return ShmGetResult::Miss;
-                    }
+                // Bounds check: slot_index must be in [0, capacity)
+                if slot_index < 0 || slot_index as u32 >= capacity {
+                    return OptimisticResult::Miss; // torn read, will be caught by seqlock
                 }
 
-                // Copy value bytes out
-                let value_offset = SLOT_HEADER_SIZE + slot.key_len as usize;
-                let value_ptr = slot_ptr.add(value_offset);
-                let value = std::slice::from_raw_parts(value_ptr, slot.value_len as usize).to_vec();
+                let slot_ptr = slab_base.add(slot_index as usize * slot_size as usize);
+                let slot = &*(slot_ptr as *const SlotHeader);
 
-                // Update ordering and stats
-                let header = self.header_mut();
-                ordering::on_access(header, self.slab_base_mut(), slot_size, idx, strategy);
-                header.hits += 1;
+                if slot.occupied != 0 && slot.key_len == key_bytes.len() as u32 {
+                    let key_len = slot.key_len as usize;
+                    let value_len = slot.value_len as usize;
 
+                    // Bounds check: key + value must fit in slot data area
+                    if key_len + value_len > max_data_size {
+                        return OptimisticResult::Miss; // torn read
+                    }
+
+                    let stored_key =
+                        std::slice::from_raw_parts(slot_ptr.add(SLOT_HEADER_SIZE), key_len);
+                    if stored_key == key_bytes {
+                        // Check TTL
+                        if ttl_nanos > 0 {
+                            let now = current_time_nanos();
+                            if now.saturating_sub(slot.created_at_nanos) > ttl_nanos {
+                                return OptimisticResult::Expired { slot_index };
+                            }
+                        }
+
+                        // Copy value bytes
+                        let value_ptr = slot_ptr.add(SLOT_HEADER_SIZE + key_len);
+                        let value = std::slice::from_raw_parts(value_ptr, value_len).to_vec();
+                        return OptimisticResult::Hit { value, slot_index };
+                    }
+                }
+            }
+
+            idx = (idx + 1) & mask;
+        }
+
+        OptimisticResult::Miss
+    }
+
+    /// Optimistic lock-free read using the seqlock.
+    /// Retries if a writer was active during the read.
+    unsafe fn get_optimistic(
+        &self,
+        lock: &ShmSeqLock,
+        key_hash: u64,
+        key_bytes: &[u8],
+    ) -> OptimisticResult {
+        loop {
+            let seq = lock.read_begin();
+
+            // Read header fields we need (may be torn — that's OK, seqlock catches it)
+            let h = self.header();
+            let ht_capacity = h.ht_capacity;
+            let slot_size = h.slot_size;
+            let capacity = h.capacity;
+            let ttl_nanos = h.ttl_nanos;
+            let max_data_size = (h.max_key_size + h.max_value_size) as usize;
+
+            let result = self.ht_lookup_checked(
+                self.ht_base(),
+                ht_capacity,
+                self.slab_base(),
+                slot_size,
+                capacity,
+                max_data_size,
+                key_hash,
+                key_bytes,
+                ttl_nanos,
+            );
+
+            if lock.read_validate(seq) {
+                return result;
+            }
+            // Writer was active — retry
+        }
+    }
+
+    /// Look up a key (by hash + serialized bytes). Returns a copy of the value bytes on hit.
+    ///
+    /// Uses optimistic seqlock reads. Only acquires the write lock when ordering
+    /// needs updating (LRU/MRU/LFU hit) or when removing an expired entry.
+    pub fn get(&self, key_hash: u64, key_bytes: &[u8]) -> ShmGetResult {
+        let lock = self.lock();
+
+        let result = unsafe { self.get_optimistic(&lock, key_hash, key_bytes) };
+
+        match result {
+            OptimisticResult::Hit { value, slot_index } => {
+                let strategy = self.header().strategy;
+
+                // FIFO: no ordering update needed — fully lock-free
+                if strategy != 2 {
+                    // LRU/MRU/LFU: brief write lock for ordering update
+                    lock.write_lock();
+                    unsafe {
+                        // Re-verify the slot is still valid (another writer may have evicted it)
+                        let slot_size = self.header().slot_size;
+                        let slot_ptr = self
+                            .slab_base()
+                            .add(slot_index as usize * slot_size as usize);
+                        let slot = &*(slot_ptr as *const SlotHeader);
+                        if slot.occupied != 0 && slot.key_hash == key_hash {
+                            let header = self.header_mut();
+                            ordering::on_access(
+                                header,
+                                self.slab_base_mut(),
+                                slot_size,
+                                slot_index,
+                                strategy,
+                            );
+                        }
+                    }
+                    lock.write_unlock();
+                }
+
+                // Stats: atomic, no lock needed
+                self.atomic_hits().fetch_add(1, AtomicOrdering::Relaxed);
                 ShmGetResult::Hit(value)
             }
-            None => {
-                let header = self.header_mut();
-                header.misses += 1;
+            OptimisticResult::Miss => {
+                self.atomic_misses().fetch_add(1, AtomicOrdering::Relaxed);
+                ShmGetResult::Miss
+            }
+            OptimisticResult::Expired { slot_index } => {
+                // Need write lock to remove the expired entry
+                lock.write_lock();
+                unsafe {
+                    // Re-verify the slot is still the same expired entry
+                    let slot_size = self.header().slot_size;
+                    let slot_ptr = self
+                        .slab_base()
+                        .add(slot_index as usize * slot_size as usize);
+                    let slot = &*(slot_ptr as *const SlotHeader);
+                    if slot.occupied != 0 && slot.key_hash == key_hash {
+                        // Re-read key bytes to pass to remove_slot
+                        let key_len = slot.key_len as usize;
+                        let stored_key =
+                            std::slice::from_raw_parts(slot_ptr.add(SLOT_HEADER_SIZE), key_len);
+                        // Only remove if key actually matches (slot could have been reused)
+                        if stored_key == key_bytes {
+                            self.remove_slot(slot_index, key_bytes);
+                        }
+                    }
+                }
+                lock.write_unlock();
+
+                self.atomic_misses().fetch_add(1, AtomicOrdering::Relaxed);
                 ShmGetResult::Miss
             }
         }
@@ -356,30 +524,22 @@ impl ShmCache {
         header.free_head = 0;
     }
 
-    /// Increment oversize skip counter.
+    /// Increment oversize skip counter. Lock-free via atomic.
     pub fn record_oversize_skip(&self) {
-        let lock = self.lock();
-        lock.write_lock();
-        unsafe {
-            self.header_mut().oversize_skips += 1;
-        }
-        lock.write_unlock();
+        self.atomic_oversize_skips()
+            .fetch_add(1, AtomicOrdering::Relaxed);
     }
 
-    /// Get cache statistics.
+    /// Get cache statistics. Lock-free via atomic loads.
     pub fn info(&self) -> ShmCacheInfo {
-        let lock = self.lock();
-        lock.read_lock();
         let h = self.header();
-        let info = ShmCacheInfo {
-            hits: h.hits,
-            misses: h.misses,
+        ShmCacheInfo {
+            hits: self.atomic_hits().load(AtomicOrdering::Relaxed),
+            misses: self.atomic_misses().load(AtomicOrdering::Relaxed),
             max_size: h.capacity as usize,
             current_size: h.current_size as usize,
-            oversize_skips: h.oversize_skips,
-        };
-        lock.read_unlock();
-        info
+            oversize_skips: self.atomic_oversize_skips().load(AtomicOrdering::Relaxed),
+        }
     }
 }
 
@@ -423,6 +583,6 @@ fn current_time_nanos() -> u64 {
     }
 }
 
-// ShmCache is Send+Sync because all mutations go through the shm rwlock
+// ShmCache is Send+Sync because all mutations go through the shm seqlock
 unsafe impl Send for ShmCache {}
 unsafe impl Sync for ShmCache {}

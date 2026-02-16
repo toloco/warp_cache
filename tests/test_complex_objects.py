@@ -6,12 +6,12 @@ import os
 import tempfile
 from dataclasses import dataclass
 
-from fast_cache import Strategy, cache
-
+from warp_cache import cache
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 @dataclass(frozen=True)
 class Point:
@@ -29,7 +29,7 @@ class User:
 
 def _cleanup_shm():
     tmpdir = tempfile.gettempdir()
-    shm_dir = os.path.join(tmpdir, "fast_cache")
+    shm_dir = os.path.join(tmpdir, "warp_cache")
     if os.path.isdir(shm_dir):
         for f in glob.glob(os.path.join(shm_dir, "*")):
             with contextlib.suppress(OSError):

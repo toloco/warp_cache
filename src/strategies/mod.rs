@@ -8,7 +8,8 @@ use crate::key::CacheKey;
 
 pub trait EvictionStrategy: Send + Sync {
     fn insert(&mut self, key: CacheKey, entry: CacheEntry);
-    fn get_mut(&mut self, key: &CacheKey) -> Option<&mut CacheEntry>;
+    fn peek(&self, key: &CacheKey) -> Option<&CacheEntry>;
+    fn record_access(&mut self, key: &CacheKey);
     fn remove(&mut self, key: &CacheKey) -> Option<CacheEntry>;
     fn len(&self) -> usize;
     fn clear(&mut self);
@@ -35,12 +36,22 @@ impl StrategyEnum {
     }
 
     #[inline(always)]
-    pub fn get_mut(&mut self, key: &CacheKey) -> Option<&mut CacheEntry> {
+    pub fn peek(&self, key: &CacheKey) -> Option<&CacheEntry> {
         match self {
-            Self::Lru(s) => s.get_mut(key),
-            Self::Mru(s) => s.get_mut(key),
-            Self::Fifo(s) => s.get_mut(key),
-            Self::Lfu(s) => s.get_mut(key),
+            Self::Lru(s) => s.peek(key),
+            Self::Mru(s) => s.peek(key),
+            Self::Fifo(s) => s.peek(key),
+            Self::Lfu(s) => s.peek(key),
+        }
+    }
+
+    #[inline(always)]
+    pub fn record_access(&mut self, key: &CacheKey) {
+        match self {
+            Self::Lru(s) => s.record_access(key),
+            Self::Mru(s) => s.record_access(key),
+            Self::Fifo(s) => s.record_access(key),
+            Self::Lfu(s) => s.record_access(key),
         }
     }
 

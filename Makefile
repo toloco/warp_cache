@@ -1,4 +1,4 @@
-.PHONY: help fmt lint build build-debug test test-only bench bench-quick bench-all bench-report clean publish publish-test setup all
+.PHONY: help fmt lint build build-debug test test-rust test-only bench bench-quick bench-all bench-report clean publish publish-test setup all
 
 # Optional: specify Python version, e.g. make build PYTHON=3.14
 PYTHON ?=
@@ -14,13 +14,13 @@ setup: ## Create venv and install dev dependencies
 
 # ── Format ───────────────────────────────────────────────────────────────────
 fmt: ## Format Python (ruff) and Rust (cargo fmt)
-	uv run $(UV_PYTHON) ruff format fast_cache/ tests/ benchmarks/
-	uv run $(UV_PYTHON) ruff check --fix fast_cache/ tests/ benchmarks/
+	uv run $(UV_PYTHON) ruff format warp_cache/ tests/ benchmarks/
+	uv run $(UV_PYTHON) ruff check --fix warp_cache/ tests/ benchmarks/
 	cargo fmt
 
 # ── Lint ─────────────────────────────────────────────────────────────────────
 lint: ## Lint Python (ruff) and Rust (clippy)
-	uv run $(UV_PYTHON) ruff check fast_cache/ tests/ benchmarks/
+	uv run $(UV_PYTHON) ruff check warp_cache/ tests/ benchmarks/
 	cargo clippy -- -D warnings
 
 # ── Build ────────────────────────────────────────────────────────────────────
@@ -31,7 +31,10 @@ build-debug: ## Build the Rust extension (debug, faster compile)
 	uv run $(UV_PYTHON) maturin develop
 
 # ── Test ─────────────────────────────────────────────────────────────────────
-test: build ## Build and run tests
+test-rust: ## Run Rust unit tests
+	cargo test
+
+test: build test-rust ## Build and run tests
 	uv run $(UV_PYTHON) pytest tests/ -v
 
 

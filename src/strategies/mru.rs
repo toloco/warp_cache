@@ -32,16 +32,16 @@ impl EvictionStrategy for MruStrategy {
         self.map.insert(key, entry);
     }
 
-    fn get_mut(&mut self, key: &CacheKey) -> Option<&mut CacheEntry> {
-        if !self.map.contains_key(key) {
-            return None;
-        }
+    fn peek(&self, key: &CacheKey) -> Option<&CacheEntry> {
+        self.map.get(key)
+    }
+
+    fn record_access(&mut self, key: &CacheKey) {
         // Move to back (most recent) by removing and re-inserting
-        let entry = self.map.remove(key).unwrap();
-        let key_clone = key.clone();
-        self.map.insert(key_clone, entry);
-        // Get a mutable reference to the just-inserted entry
-        self.map.get_mut(key)
+        if let Some(entry) = self.map.remove(key) {
+            let key_clone = key.clone();
+            self.map.insert(key_clone, entry);
+        }
     }
 
     fn remove(&mut self, key: &CacheKey) -> Option<CacheEntry> {

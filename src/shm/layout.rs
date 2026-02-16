@@ -1,10 +1,14 @@
-/// `#[repr(C)]` structures that live in shared memory (mmap).
-///
-/// All structs use fixed-size fields and explicit padding so the
-/// layout is identical across compilations and processes.
+//! `#[repr(C)]` structures that live in shared memory (mmap).
+//!
+//! All structs use fixed-size fields and explicit padding so the
+//! layout is identical across compilations and processes.
 
 /// Magic bytes at the start of the header to validate the mapping.
 pub const MAGIC: [u8; 8] = *b"FCACHE01";
+
+/// Layout version — bumped when the lock format changes.
+/// v1 = pthread_rwlock, v2 = seqlock.
+pub const VERSION: u32 = 2;
 
 /// Size of the fixed header at the start of the region.
 pub const HEADER_SIZE: usize = 256;
@@ -104,4 +108,27 @@ pub fn ht_offset() -> usize {
 /// Offset of the slab arena from the start of the region.
 pub fn slab_offset(ht_capacity: u32) -> usize {
     HEADER_SIZE + (ht_capacity as usize * Bucket::SIZE)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn region_size_calculation() {
+        // capacity=4, ht_capacity=8 (2×), slot_size=128
+        // 256 (header) + 8×16 (buckets) + 4×128 (slots) = 256 + 128 + 512 = 896
+        assert_eq!(region_size(4, 8, 128), 896);
+    }
+
+    #[test]
+    fn ht_offset_is_after_header() {
+        assert_eq!(ht_offset(), HEADER_SIZE);
+    }
+
+    #[test]
+    fn slab_offset_is_after_ht() {
+        assert_eq!(slab_offset(8), HEADER_SIZE + 8 * Bucket::SIZE);
+        assert_eq!(slab_offset(16), HEADER_SIZE + 16 * Bucket::SIZE);
+    }
 }

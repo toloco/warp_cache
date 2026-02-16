@@ -1,6 +1,6 @@
 import time
 
-from fast_cache import cache
+from warp_cache import cache
 
 
 def test_ttl_expiry():

@@ -8,8 +8,8 @@ use std::path::{Path, PathBuf};
 
 use memmap2::MmapMut;
 
-use super::layout::{self, Bucket, Header, SlotHeader, BUCKET_EMPTY, MAGIC, SLOT_NONE};
-use super::lock::{ShmRwLock, LOCK_SIZE};
+use super::layout::{self, Bucket, Header, SlotHeader, BUCKET_EMPTY, MAGIC, SLOT_NONE, VERSION};
+use super::lock::{ShmSeqLock, LOCK_SIZE};
 
 /// Where to store the mmap files.
 fn shm_dir() -> PathBuf {
@@ -17,7 +17,7 @@ fn shm_dir() -> PathBuf {
         PathBuf::from("/dev/shm")
     } else {
         // macOS and other Unix: use TMPDIR
-        std::env::temp_dir().join("fast_cache")
+        std::env::temp_dir().join("warp_cache")
     }
 }
 
@@ -83,7 +83,7 @@ impl ShmRegion {
         // Initialize header
         let header = unsafe { &mut *(mmap.as_mut_ptr() as *mut Header) };
         header.magic = MAGIC;
-        header.version = 1;
+        header.version = VERSION;
         header.strategy = strategy;
         header.capacity = capacity;
         header.ht_capacity = ht_capacity;
@@ -122,9 +122,9 @@ impl ShmRegion {
             };
         }
 
-        // Initialize the cross-process rwlock in the lock region
+        // Initialize the seqlock in the lock region
         unsafe {
-            ShmRwLock::init(lock_mmap.as_mut_ptr())?;
+            ShmSeqLock::init(lock_mmap.as_mut_ptr())?;
         }
 
         mmap.flush()?;
@@ -198,7 +198,8 @@ impl ShmRegion {
                 Ok(region) => {
                     // Validate parameters match
                     let header = region.header();
-                    if header.capacity == capacity
+                    if header.version == VERSION
+                        && header.capacity == capacity
                         && header.strategy == strategy
                         && header.max_key_size == max_key_size
                         && header.max_value_size == max_value_size
@@ -234,8 +235,8 @@ impl ShmRegion {
         unsafe { &mut *(self.mmap.as_mut_ptr() as *mut Header) }
     }
 
-    pub fn lock(&self) -> ShmRwLock {
-        unsafe { ShmRwLock::from_existing(self.lock_mmap.as_ptr() as *mut u8) }
+    pub fn lock(&self) -> ShmSeqLock {
+        unsafe { ShmSeqLock::from_existing(self.lock_mmap.as_ptr() as *mut u8) }
     }
 
     pub fn base_ptr(&self) -> *const u8 {

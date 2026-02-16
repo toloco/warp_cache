@@ -20,42 +20,42 @@ No Python wrapper function. No serialization. No intermediate key object.
 
 ## Single-threaded throughput vs cache size
 
-| Cache Size | fast_cache (ops/s) | cachetools (ops/s) | lru_cache (ops/s) | fc/ct | fc/lru |
+| Cache Size | warp_cache (ops/s) | cachetools (ops/s) | lru_cache (ops/s) | fc/ct | fc/lru |
 |---:|---:|---:|---:|---:|---:|
-| 32 | 14,110,000 | 597,000 | 20,660,000 | 23.6x | 0.68x |
-| 64 | 14,750,000 | 652,000 | 23,870,000 | 22.6x | 0.62x |
-| 128 | 15,740,000 | 718,000 | 25,520,000 | 21.9x | 0.62x |
-| 256 | 17,370,000 | 821,000 | 30,490,000 | 21.2x | 0.57x |
-| 512 | 19,460,000 | 945,000 | 36,460,000 | 20.6x | 0.53x |
-| 1024 | 20,490,000 | 1,150,000 | 40,110,000 | 17.8x | 0.51x |
+| 32 | 12,350,000 | 610,000 | 22,230,000 | 20.2x | 0.56x |
+| 64 | 13,480,000 | 654,000 | 23,290,000 | 20.6x | 0.58x |
+| 128 | 14,210,000 | 717,000 | 26,760,000 | 19.8x | 0.53x |
+| 256 | 16,350,000 | 833,000 | 29,770,000 | 19.6x | 0.55x |
+| 512 | 17,660,000 | 960,000 | 35,710,000 | 18.4x | 0.49x |
+| 1024 | 17,710,000 | 1,184,000 | 39,780,000 | 15.0x | 0.45x |
 
 ## Strategy comparison (cache size = 256)
 
-| Strategy | fast_cache (ops/s) | cachetools (ops/s) | Ratio |
+| Strategy | warp_cache (ops/s) | cachetools (ops/s) | Ratio |
 |---|---:|---:|---:|
-| LRU | 17,380,000 | 812,000 | 21.4x |
-| LFU | 6,660,000 | 750,000 | 8.9x |
-| FIFO | 16,700,000 | 898,000 | 18.6x |
+| LRU | 16,350,000 | 833,000 | 19.6x |
+| LFU | 6,270,000 | 770,000 | 8.1x |
+| FIFO | 15,710,000 | 921,000 | 17.1x |
 
 ## TTL throughput (cache size = 256, ttl = 60s)
 
 | Implementation | ops/s |
 |---|---:|
-| fast_cache | 15,080,000 |
-| cachetools | 566,000 |
-| **Ratio** | **26.7x** |
+| warp_cache | 14,190,000 |
+| cachetools | 580,000 |
+| **Ratio** | **24.5x** |
 
 ## Multi-threaded throughput (cache size = 256)
 
-| Threads | fast_cache (ops/s) | cachetools + Lock (ops/s) | lru_cache + Lock (ops/s) | fc/ct | fc/lru |
+| Threads | warp_cache (ops/s) | cachetools + Lock (ops/s) | lru_cache + Lock (ops/s) | fc/ct | fc/lru |
 |---:|---:|---:|---:|---:|---:|
-| 1 | 17,610,000 | 757,000 | 12,030,000 | 23.3x | 1.46x |
-| 2 | 17,540,000 | 772,000 | 12,250,000 | 22.7x | 1.43x |
-| 4 | 17,600,000 | 774,000 | 12,130,000 | 22.8x | 1.45x |
-| 8 | 17,340,000 | 767,000 | 12,020,000 | 22.6x | 1.44x |
-| 16 | 17,450,000 | 770,000 | 11,690,000 | 22.7x | 1.49x |
+| 1 | 15,920,000 | 809,000 | 12,930,000 | 19.7x | 1.23x |
+| 2 | 15,630,000 | 810,000 | 12,670,000 | 19.3x | 1.23x |
+| 4 | 15,650,000 | 821,000 | 12,650,000 | 19.1x | 1.24x |
+| 8 | 16,410,000 | 810,000 | 12,620,000 | 20.3x | 1.30x |
+| 16 | 16,120,000 | 801,000 | 12,140,000 | 20.1x | 1.33x |
 
-`fast_cache` maintains ~18M ops/s regardless of thread count. `cachetools`
+`warp_cache` maintains ~16M ops/s regardless of thread count. `cachetools`
 requires a manual `threading.Lock()` and tops out at ~770K ops/s.
 `lru_cache + Lock` degrades as contention increases.
 
@@ -63,7 +63,7 @@ requires a manual `threading.Lock()` and tops out at ~770K ops/s.
 
 At cache size 128, a cache hit takes ~64ns vs `lru_cache`'s ~39ns:
 
-| Operation | lru_cache (C) | fast_cache (Rust) | Delta |
+| Operation | lru_cache (C) | warp_cache (Rust) | Delta |
 |---|---:|---:|---:|
 | Call dispatch (`tp_call`) | ~5ns | ~10ns | +5ns |
 | Hash args (`PyObject_Hash`) | ~15ns | ~15ns | 0 |
@@ -101,15 +101,15 @@ cost of thread safety.
 
 ## Python 3.13+/3.14 free-threading
 
-Under free-threaded Python (no GIL), `fast_cache`'s architecture pays off:
+Under free-threaded Python (no GIL), `warp_cache`'s architecture pays off:
 
-- **fast_cache improves**: `RwLock` enables true parallel reads across cores
+- **warp_cache improves**: `RwLock` enables true parallel reads across cores
 - **lru_cache gets worse**: needs a real lock without the GIL's implicit protection
 - **Trade-off**: atomic refcounting adds ~2-5ns to single-threaded cost
 
-The benchmark notebook (`benchmarks/bench.ipynb`) automatically creates
-temporary uv venvs for each Python version, builds fast_cache via maturin, runs
-all benchmarks, and generates cross-version comparison plots inline.
+The benchmark runner (`benchmarks/_bench_runner.py`) automatically creates
+temporary uv venvs for each Python version, builds warp_cache via maturin, and
+runs all benchmarks.
 
 ## Optimization Journey
 

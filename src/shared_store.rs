@@ -4,6 +4,7 @@ use std::hash::{Hash, Hasher};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyTuple};
 
+use crate::serde;
 use crate::shm::{ShmCache, ShmGetResult};
 
 /// Cache info for the shared backend, exposed to Python.
@@ -47,6 +48,7 @@ pub struct SharedCachedFunction {
 impl SharedCachedFunction {
     #[new]
     #[pyo3(signature = (fn_obj, strategy, max_size, ttl=None, max_key_size=512, max_value_size=4096, shm_name=None))]
+    #[allow(clippy::too_many_arguments)]
     fn new(
         py: Python<'_>,
         fn_obj: Py<PyAny>,
@@ -94,29 +96,26 @@ impl SharedCachedFunction {
         args: Bound<'py, PyTuple>,
         kwargs: Option<Bound<'py, PyDict>>,
     ) -> PyResult<Py<PyAny>> {
-        let (key_obj, key_hash, key_bytes_obj) = self.make_key(py, &args, &kwargs)?;
-        let key_bytes: &[u8] = key_bytes_obj.bind(py).extract()?;
+        let (key_hash, key_bytes) = self.make_key(py, &args, &kwargs)?;
 
         // Check size limits
         {
             let cache = self.cache.lock();
-            if key_bytes.len() > cache.info().max_size {
-                if cache.is_oversize(key_bytes, &[]) {
-                    cache.record_oversize_skip();
-                    drop(cache);
-                    return self
-                        .fn_obj
-                        .bind(py)
-                        .call(args, kwargs.as_ref())
-                        .map(|r| r.unbind());
-                }
+            if key_bytes.len() > cache.info().max_size && cache.is_oversize(&key_bytes, &[]) {
+                cache.record_oversize_skip();
+                drop(cache);
+                return self
+                    .fn_obj
+                    .bind(py)
+                    .call(args, kwargs.as_ref())
+                    .map(|r| r.unbind());
             }
         }
 
         // Lookup in shared cache
         let value_bytes: Option<Vec<u8>> = {
             let cache = self.cache.lock();
-            match cache.get(key_hash, key_bytes) {
+            match cache.get(key_hash, &key_bytes) {
                 ShmGetResult::Hit(v) => Some(v),
                 ShmGetResult::Miss => None,
             }
@@ -124,14 +123,13 @@ impl SharedCachedFunction {
 
         // On hit: deserialize and return
         if let Some(vb) = value_bytes {
-            let value = self.pickle_loads.bind(py).call1((vb.as_slice(),))?;
-            return Ok(value.unbind());
+            return self.deserialize_value(py, &vb);
         }
 
         // Cache miss: call the wrapped function
         let result = self.fn_obj.bind(py).call(args, kwargs.as_ref())?;
 
-        self.store_result(py, &key_obj, key_hash, key_bytes, &result)?;
+        self.store_result(py, key_hash, &key_bytes, &result)?;
 
         Ok(result.unbind())
     }
@@ -144,14 +142,13 @@ impl SharedCachedFunction {
         args: Bound<'py, PyTuple>,
         kwargs: Option<Bound<'py, PyDict>>,
     ) -> PyResult<Option<Py<PyAny>>> {
-        let (_key_obj, key_hash, key_bytes_obj) = self.make_key(py, &args, &kwargs)?;
-        let key_bytes: &[u8] = key_bytes_obj.bind(py).extract()?;
+        let (key_hash, key_bytes) = self.make_key(py, &args, &kwargs)?;
 
         let cache = self.cache.lock();
-        match cache.get(key_hash, key_bytes) {
+        match cache.get(key_hash, &key_bytes) {
             ShmGetResult::Hit(vb) => {
-                let value = self.pickle_loads.bind(py).call1((vb.as_slice(),))?;
-                Ok(Some(value.unbind()))
+                let value = self.deserialize_value(py, &vb)?;
+                Ok(Some(value))
             }
             ShmGetResult::Miss => Ok(None),
         }
@@ -166,10 +163,9 @@ impl SharedCachedFunction {
         args: Bound<'py, PyTuple>,
         kwargs: Option<Bound<'py, PyDict>>,
     ) -> PyResult<()> {
-        let (key_obj, key_hash, key_bytes_obj) = self.make_key(py, &args, &kwargs)?;
-        let key_bytes: &[u8] = key_bytes_obj.bind(py).extract()?;
+        let (key_hash, key_bytes) = self.make_key(py, &args, &kwargs)?;
         let result = value.bind(py);
-        self.store_result(py, &key_obj, key_hash, key_bytes, result)?;
+        self.store_result(py, key_hash, &key_bytes, result)?;
         Ok(())
     }
 
@@ -192,13 +188,13 @@ impl SharedCachedFunction {
 }
 
 impl SharedCachedFunction {
-    /// Build (key_obj, key_hash, pickled_key_bytes) from call args.
+    /// Build (key_hash, serialized_key_bytes) from call args.
     fn make_key<'py>(
         &self,
         py: Python<'py>,
         args: &Bound<'py, PyTuple>,
         kwargs: &Option<Bound<'py, PyDict>>,
-    ) -> PyResult<(Py<PyAny>, u64, Py<PyAny>)> {
+    ) -> PyResult<(u64, Vec<u8>)> {
         let key_obj: Py<PyAny> = match kwargs {
             Some(ref kw) if !kw.is_empty() => {
                 let builtins = py.import("builtins")?;
@@ -218,25 +214,38 @@ impl SharedCachedFunction {
             hasher.finish()
         };
 
-        let key_bytes_obj = self.pickle_dumps.bind(py).call1((&key_obj,))?.unbind();
-        Ok((key_obj, key_hash, key_bytes_obj))
+        // Fast path: serialize key without pickle
+        let key_bound = key_obj.bind(py);
+        if let Some(bytes) = serde::serialize(py, key_bound)? {
+            return Ok((key_hash, bytes));
+        }
+
+        // Fallback: pickle
+        let pickle_obj = self.pickle_dumps.bind(py).call1((&key_obj,))?;
+        let pickle_bytes: &[u8] = pickle_obj.extract()?;
+        Ok((key_hash, serde::wrap_pickle(pickle_bytes)))
     }
 
     /// Serialize and store a result, checking value size limits.
     fn store_result<'py>(
         &self,
         py: Python<'py>,
-        _key_obj: &Py<PyAny>,
         key_hash: u64,
         key_bytes: &[u8],
         result: &Bound<'py, PyAny>,
     ) -> PyResult<()> {
-        let value_bytes_obj = self.pickle_dumps.bind(py).call1((result,))?;
-        let value_bytes: &[u8] = value_bytes_obj.extract()?;
+        // Fast path: serialize value without pickle
+        let value_bytes = if let Some(bytes) = serde::serialize(py, result)? {
+            bytes
+        } else {
+            let pickle_obj = self.pickle_dumps.bind(py).call1((result,))?;
+            let pickle_bytes: &[u8] = pickle_obj.extract()?;
+            serde::wrap_pickle(pickle_bytes)
+        };
 
         {
             let cache = self.cache.lock();
-            if cache.is_oversize(key_bytes, value_bytes) {
+            if cache.is_oversize(key_bytes, &value_bytes) {
                 cache.record_oversize_skip();
                 return Ok(());
             }
@@ -244,9 +253,21 @@ impl SharedCachedFunction {
 
         {
             let mut cache = self.cache.lock();
-            cache.insert(key_hash, key_bytes, value_bytes);
+            cache.insert(key_hash, key_bytes, &value_bytes);
         }
         Ok(())
+    }
+
+    /// Deserialize a value from shared memory bytes.
+    fn deserialize_value(&self, py: Python, data: &[u8]) -> PyResult<Py<PyAny>> {
+        // Fast path
+        if let Some(obj) = serde::deserialize(py, data)? {
+            return Ok(obj);
+        }
+        // Fallback: pickle (skip TAG_PICKLE byte)
+        let payload = serde::pickle_payload(data);
+        let value = self.pickle_loads.bind(py).call1((payload,))?;
+        Ok(value.unbind())
     }
 }
 
@@ -268,5 +289,5 @@ fn derive_shm_name(py: Python<'_>, fn_obj: &Py<PyAny>) -> PyResult<String> {
     qualname.hash(&mut hasher);
     let hash = hasher.finish();
 
-    Ok(format!("fast_cache_{module}_{qualname}_{hash:016x}"))
+    Ok(format!("warp_cache_{module}_{qualname}_{hash:016x}"))
 }

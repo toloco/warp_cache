@@ -1,6 +1,7 @@
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyTuple};
 
@@ -12,51 +13,19 @@ use crate::strategies::lru::LruStrategy;
 use crate::strategies::mru::MruStrategy;
 use crate::strategies::StrategyEnum;
 
+const ACCESS_LOG_CAPACITY: usize = 64;
+
 struct CacheStoreInner {
     strategy: StrategyEnum,
     ttl: Option<Duration>,
-    hits: u64,
-    misses: u64,
-}
-
-enum LookupResult {
-    Hit(Py<PyAny>),
-    Miss,
-    Expired,
 }
 
 impl CacheStoreInner {
+    /// Drain the access log and replay deferred ordering updates.
     #[inline(always)]
-    fn lookup(&mut self, py: Python<'_>, key: &CacheKey) -> LookupResult {
-        match self.strategy.get_mut(key) {
-            Some(entry) => {
-                if let Some(ttl) = self.ttl {
-                    if entry.created_at.elapsed() > ttl {
-                        return LookupResult::Expired;
-                    }
-                }
-                LookupResult::Hit(entry.value.clone_ref(py))
-            }
-            None => LookupResult::Miss,
-        }
-    }
-
-    #[inline(always)]
-    fn get(&mut self, py: Python<'_>, key: &CacheKey) -> Option<Py<PyAny>> {
-        match self.lookup(py, key) {
-            LookupResult::Hit(val) => {
-                self.hits += 1;
-                Some(val)
-            }
-            LookupResult::Miss => {
-                self.misses += 1;
-                None
-            }
-            LookupResult::Expired => {
-                self.strategy.remove(key);
-                self.misses += 1;
-                None
-            }
+    fn drain_access_log(&mut self, log: &mut Vec<CacheKey>) {
+        for key in log.drain(..) {
+            self.strategy.record_access(&key);
         }
     }
 }
@@ -87,6 +56,9 @@ impl CacheInfo {
 pub struct CachedFunction {
     fn_obj: Py<PyAny>,
     inner: RwLock<CacheStoreInner>,
+    access_log: Mutex<Vec<CacheKey>>,
+    hits: AtomicU64,
+    misses: AtomicU64,
 }
 
 #[pymethods]
@@ -107,9 +79,10 @@ impl CachedFunction {
             inner: RwLock::new(CacheStoreInner {
                 strategy: strat,
                 ttl: ttl_dur,
-                hits: 0,
-                misses: 0,
             }),
+            access_log: Mutex::new(Vec::with_capacity(ACCESS_LOG_CAPACITY)),
+            hits: AtomicU64::new(0),
+            misses: AtomicU64::new(0),
         }
     }
 
@@ -134,28 +107,74 @@ impl CachedFunction {
         };
         let cache_key = CacheKey::new(py, key_obj)?;
 
-        // Lookup in cache
+        // FAST PATH: read lock — cache hit
         {
-            let mut inner = self.inner.write();
-            if let Some(val) = inner.get(py, &cache_key) {
-                return Ok(val);
+            let inner = self.inner.read();
+            if let Some(entry) = inner.strategy.peek(&cache_key) {
+                if let Some(ttl) = inner.ttl {
+                    if entry.created_at.elapsed() > ttl {
+                        // Expired — fall through to slow path (can't remove under read lock)
+                        drop(inner);
+                    } else {
+                        let val = entry.value.clone_ref(py);
+                        drop(inner);
+                        self.hits.fetch_add(1, Ordering::Relaxed);
+                        let mut log = self.access_log.lock();
+                        if log.len() < ACCESS_LOG_CAPACITY {
+                            log.push(cache_key);
+                        }
+                        return Ok(val);
+                    }
+                } else {
+                    let val = entry.value.clone_ref(py);
+                    drop(inner);
+                    self.hits.fetch_add(1, Ordering::Relaxed);
+                    let mut log = self.access_log.lock();
+                    if log.len() < ACCESS_LOG_CAPACITY {
+                        log.push(cache_key);
+                    }
+                    return Ok(val);
+                }
             }
         }
 
-        // Cache miss: call the wrapped function (outside lock)
+        // Cache miss: call the wrapped function (outside any lock)
         let result = self.fn_obj.bind(py).call(args, kwargs.as_ref())?.unbind();
 
-        // Insert into cache
+        // SLOW PATH: write lock — drain access log + insert
         {
             let mut inner = self.inner.write();
-            let entry = CacheEntry {
-                value: result.clone_ref(py),
-                created_at: Instant::now(),
-                frequency: 0,
+
+            // Drain deferred access log
+            let mut log = self.access_log.lock();
+            inner.drain_access_log(&mut log);
+            drop(log);
+
+            // Double-check: another thread may have inserted while we were computing
+            let needs_insert = match inner.strategy.peek(&cache_key) {
+                Some(entry) => {
+                    if let Some(ttl) = inner.ttl {
+                        entry.created_at.elapsed() > ttl
+                    } else {
+                        false
+                    }
+                }
+                None => true,
             };
-            inner.strategy.insert(cache_key, entry);
+
+            if needs_insert {
+                // Remove expired entry if present
+                inner.strategy.remove(&cache_key);
+                let entry = CacheEntry {
+                    value: result.clone_ref(py),
+                    created_at: Instant::now(),
+                    frequency: 0,
+                };
+                inner.strategy.insert(cache_key, entry);
+            }
         }
 
+        self.misses.fetch_add(1, Ordering::Relaxed);
         Ok(result)
     }
 
@@ -168,8 +187,64 @@ impl CachedFunction {
         kwargs: Option<Bound<'py, PyDict>>,
     ) -> PyResult<Option<Py<PyAny>>> {
         let cache_key = Self::make_key(py, &args, &kwargs)?;
-        let mut inner = self.inner.write();
-        Ok(inner.get(py, &cache_key))
+
+        // FAST PATH: read lock
+        {
+            let inner = self.inner.read();
+            if let Some(entry) = inner.strategy.peek(&cache_key) {
+                if let Some(ttl) = inner.ttl {
+                    if entry.created_at.elapsed() > ttl {
+                        // Expired — need write lock to remove
+                        drop(inner);
+                    } else {
+                        let val = entry.value.clone_ref(py);
+                        drop(inner);
+                        self.hits.fetch_add(1, Ordering::Relaxed);
+                        let mut log = self.access_log.lock();
+                        if log.len() < ACCESS_LOG_CAPACITY {
+                            log.push(cache_key);
+                        }
+                        return Ok(Some(val));
+                    }
+                } else {
+                    let val = entry.value.clone_ref(py);
+                    drop(inner);
+                    self.hits.fetch_add(1, Ordering::Relaxed);
+                    let mut log = self.access_log.lock();
+                    if log.len() < ACCESS_LOG_CAPACITY {
+                        log.push(cache_key);
+                    }
+                    return Ok(Some(val));
+                }
+            }
+        }
+
+        // SLOW PATH: write lock for expired removal
+        {
+            let mut inner = self.inner.write();
+            let mut log = self.access_log.lock();
+            inner.drain_access_log(&mut log);
+            drop(log);
+
+            // Check again under write lock
+            if let Some(entry) = inner.strategy.peek(&cache_key) {
+                if let Some(ttl) = inner.ttl {
+                    if entry.created_at.elapsed() > ttl {
+                        inner.strategy.remove(&cache_key);
+                        self.misses.fetch_add(1, Ordering::Relaxed);
+                        return Ok(None);
+                    }
+                }
+                // Hit (possibly inserted by another thread)
+                let val = entry.value.clone_ref(py);
+                inner.strategy.record_access(&cache_key);
+                self.hits.fetch_add(1, Ordering::Relaxed);
+                return Ok(Some(val));
+            }
+        }
+
+        self.misses.fetch_add(1, Ordering::Relaxed);
+        Ok(None)
     }
 
     /// Store a value in the cache for the given arguments.
@@ -183,6 +258,12 @@ impl CachedFunction {
     ) -> PyResult<()> {
         let cache_key = Self::make_key(py, &args, &kwargs)?;
         let mut inner = self.inner.write();
+
+        // Drain deferred access log
+        let mut log = self.access_log.lock();
+        inner.drain_access_log(&mut log);
+        drop(log);
+
         let entry = CacheEntry {
             value: value.clone_ref(py),
             created_at: Instant::now(),
@@ -195,8 +276,8 @@ impl CachedFunction {
     fn cache_info(&self) -> CacheInfo {
         let inner = self.inner.read();
         CacheInfo {
-            hits: inner.hits,
-            misses: inner.misses,
+            hits: self.hits.load(Ordering::Relaxed),
+            misses: self.misses.load(Ordering::Relaxed),
             max_size: inner.strategy.capacity(),
             current_size: inner.strategy.len(),
         }
@@ -205,8 +286,9 @@ impl CachedFunction {
     fn cache_clear(&self) {
         let mut inner = self.inner.write();
         inner.strategy.clear();
-        inner.hits = 0;
-        inner.misses = 0;
+        self.access_log.lock().clear();
+        self.hits.store(0, Ordering::Relaxed);
+        self.misses.store(0, Ordering::Relaxed);
     }
 }
 

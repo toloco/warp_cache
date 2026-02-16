@@ -1,4 +1,3 @@
-import sys
 from enum import IntEnum
 
 

@@ -5,13 +5,13 @@ import glob
 import os
 import tempfile
 
-from fast_cache import SharedCacheInfo, Strategy, cache
+from warp_cache import SharedCacheInfo, Strategy, cache
 
 
 def _cleanup_shm():
     """Remove any leftover shared memory files."""
     tmpdir = tempfile.gettempdir()
-    shm_dir = os.path.join(tmpdir, "fast_cache")
+    shm_dir = os.path.join(tmpdir, "warp_cache")
     if os.path.isdir(shm_dir):
         for f in glob.glob(os.path.join(shm_dir, "*")):
             with contextlib.suppress(OSError):
@@ -127,6 +127,30 @@ class TestSharedBasicHitMiss:
         assert fn(big_key) == big_key
         assert fn(big_key) == big_key  # computed again, not cached
         assert fn.cache_info().oversize_skips > 0
+
+    def test_fast_path_types(self):
+        """All fast-path primitive types should cache correctly."""
+
+        @cache(strategy=Strategy.LRU, max_size=128, backend="shared")
+        def fn(x):
+            return x
+
+        for val in [42, 3.14, "hello", b"world", True, False, None]:
+            assert fn(val) == val  # miss
+            assert fn(val) == val  # hit
+        assert fn.cache_info().hits == 7
+        assert fn.cache_info().misses == 7
+
+    def test_fast_path_tuple_keys(self):
+        """Tuples of primitives should use fast-path serialization."""
+
+        @cache(strategy=Strategy.LRU, max_size=128, backend="shared")
+        def fn(a, b):
+            return a + b
+
+        assert fn(1, 2) == 3
+        assert fn(1, 2) == 3  # hit
+        assert fn.cache_info().hits == 1
 
     def test_shared_cache_info_repr(self):
         @cache(strategy=Strategy.LRU, max_size=64, backend="shared")
@@ -259,7 +283,7 @@ class TestSharedMemoryBackend:
         _cleanup_shm()
 
     def test_default_is_memory(self):
-        from fast_cache._fast_cache_rs import CacheInfo
+        from warp_cache._warp_cache_rs import CacheInfo
 
         @cache(strategy=Strategy.LRU, max_size=128)
         def fn(x):

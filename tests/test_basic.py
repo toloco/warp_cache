@@ -1,4 +1,4 @@
-from fast_cache import Strategy, cache
+from warp_cache import Strategy, cache
 
 
 def test_basic_hit_miss():

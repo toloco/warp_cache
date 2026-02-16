@@ -4,6 +4,8 @@ mod store;
 mod strategies;
 
 #[cfg(not(target_os = "windows"))]
+mod serde;
+#[cfg(not(target_os = "windows"))]
 mod shared_store;
 #[cfg(not(target_os = "windows"))]
 mod shm;
@@ -21,7 +23,7 @@ use shared_store::{SharedCacheInfo, SharedCachedFunction};
 use shared_store_stub::{SharedCacheInfo, SharedCachedFunction};
 
 #[pymodule]
-fn _fast_cache_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn _warp_cache_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<CachedFunction>()?;
     m.add_class::<CacheInfo>()?;
     m.add_class::<SharedCachedFunction>()?;

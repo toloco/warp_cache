@@ -2,8 +2,8 @@ import asyncio
 
 import pytest
 
-from fast_cache import Strategy, cache
-from fast_cache._decorator import AsyncCachedFunction
+from warp_cache import Strategy, cache
+from warp_cache._decorator import AsyncCachedFunction
 
 # ── Basic hit/miss ────────────────────────────────────────────────────────
 

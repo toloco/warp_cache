@@ -3,22 +3,18 @@ requires = ["maturin>=1.0,<2.0"]
 build-backend = "maturin"
 
 [project]
-name = "fast_cache"
+name = "warp_cache"
 version = "0.1.0"
 description = "Thread-safe Python caching decorator backed by a Rust extension"
 readme = "README.md"
 license = "MIT"
-requires-python = ">=3.9"
+requires-python = ">=3.13"
 keywords = ["cache", "lru", "ttl", "thread-safe", "rust"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Rust",
     "Topic :: Software Development :: Libraries :: Python Modules",
@@ -34,18 +30,18 @@ dev = [
     "cachetools>=6.2.6",
     "cachebox>=4.0",
     "moka-py>=0.3",
-    "zoocache>=0.1; python_version >= '3.10'",
+    "zoocache>=0.1",
 ]
 
 [project.urls]
-Repository = "https://github.com/tolo/fast_cache"
+Repository = "https://github.com/tolo/warp_cache"
 
 [tool.maturin]
 features = ["pyo3/extension-module"]
-module-name = "fast_cache._fast_cache_rs"
+module-name = "warp_cache._warp_cache_rs"
 
 [tool.ruff]
-target-version = "py39"
+target-version = "py313"
 line-length = 100
 
 [tool.ruff.lint]

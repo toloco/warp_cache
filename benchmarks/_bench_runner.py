@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Unified benchmark runner for fast_cache vs multiple competitors.
+"""Unified benchmark runner for warp_cache vs multiple competitors.
 
 Executed inside each uv venv by bench_all.sh or directly via make bench.
 
@@ -17,10 +17,10 @@ import sys
 import sysconfig
 import threading
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable
 
 RESULTS_DIR = Path(__file__).resolve().parent / "results"
 RESULTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -49,27 +49,31 @@ def _identity(x: int) -> int:
 def _build_contestants() -> list[Contestant]:
     contestants: list[Contestant] = []
 
-    # 1. fast_cache (always available — this is the project under test)
-    from fast_cache import Strategy, cache
+    # 1. warp_cache (always available — this is the project under test)
+    from warp_cache import Strategy, cache
 
-    contestants.append(Contestant(
-        name="fast_cache",
-        make_lru=lambda sz: cache(strategy=Strategy.LRU, max_size=sz)(_identity),
-        make_ttl=lambda sz, ttl: cache(strategy=Strategy.LRU, max_size=sz, ttl=ttl)(_identity),
-        thread_safe=True,
-        available=True,
-        version="0.1.0",
-    ))
+    contestants.append(
+        Contestant(
+            name="warp_cache",
+            make_lru=lambda sz: cache(strategy=Strategy.LRU, max_size=sz)(_identity),
+            make_ttl=lambda sz, ttl: cache(strategy=Strategy.LRU, max_size=sz, ttl=ttl)(_identity),
+            thread_safe=True,
+            available=True,
+            version="0.1.0",
+        )
+    )
 
     # 2. functools.lru_cache (stdlib, always available)
-    contestants.append(Contestant(
-        name="lru_cache",
-        make_lru=lambda sz: functools.lru_cache(maxsize=sz)(_identity),
-        make_ttl=None,
-        thread_safe=False,
-        available=True,
-        version=sys.version.split()[0],
-    ))
+    contestants.append(
+        Contestant(
+            name="lru_cache",
+            make_lru=lambda sz: functools.lru_cache(maxsize=sz)(_identity),
+            make_ttl=None,
+            thread_safe=False,
+            available=True,
+            version=sys.version.split()[0],
+        )
+    )
 
     # 3. cachetools
     try:
@@ -77,14 +81,16 @@ def _build_contestants() -> list[Contestant]:
         from cachetools.func import lru_cache as ct_lru_cache
         from cachetools.func import ttl_cache as ct_ttl_cache
 
-        contestants.append(Contestant(
-            name="cachetools",
-            make_lru=lambda sz: ct_lru_cache(maxsize=sz)(_identity),
-            make_ttl=lambda sz, ttl: ct_ttl_cache(maxsize=sz, ttl=ttl)(_identity),
-            thread_safe=False,
-            available=True,
-            version=cachetools.__version__,
-        ))
+        contestants.append(
+            Contestant(
+                name="cachetools",
+                make_lru=lambda sz: ct_lru_cache(maxsize=sz)(_identity),
+                make_ttl=lambda sz, ttl: ct_ttl_cache(maxsize=sz, ttl=ttl)(_identity),
+                thread_safe=False,
+                available=True,
+                version=cachetools.__version__,
+            )
+        )
     except ImportError:
         contestants.append(Contestant(name="cachetools"))
 
@@ -96,17 +102,20 @@ def _build_contestants() -> list[Contestant]:
             @cachebox.cached(cachebox.LRUCache(maxsize=sz))
             def fn(x: int) -> int:
                 return x
+
             return fn
 
-        contestants.append(Contestant(
-            name="cachebox",
-            make_lru=_cachebox_lru,
-            make_ttl=None,
-            thread_safe=True,
-            available=True,
-            version=cachebox.__version__,
-            notes=["TTL only via TTLCache (FIFO, not LRU)"],
-        ))
+        contestants.append(
+            Contestant(
+                name="cachebox",
+                make_lru=_cachebox_lru,
+                make_ttl=None,
+                thread_safe=True,
+                available=True,
+                version=cachebox.__version__,
+                notes=["TTL only via TTLCache (FIFO, not LRU)"],
+            )
+        )
     except ImportError:
         contestants.append(Contestant(name="cachebox"))
 
@@ -118,22 +127,26 @@ def _build_contestants() -> list[Contestant]:
             @moka_py.cached(maxsize=sz)
             def fn(x: int) -> int:
                 return x
+
             return fn
 
         def _moka_ttl(sz, ttl):
             @moka_py.cached(maxsize=sz, ttl=ttl)
             def fn(x: int) -> int:
                 return x
+
             return fn
 
-        contestants.append(Contestant(
-            name="moka_py",
-            make_lru=_moka_lru,
-            make_ttl=_moka_ttl,
-            thread_safe=True,
-            available=True,
-            version=getattr(moka_py, "VERSION", ""),
-        ))
+        contestants.append(
+            Contestant(
+                name="moka_py",
+                make_lru=_moka_lru,
+                make_ttl=_moka_ttl,
+                thread_safe=True,
+                available=True,
+                version=getattr(moka_py, "VERSION", ""),
+            )
+        )
     except ImportError:
         contestants.append(Contestant(name="moka_py"))
 
@@ -143,20 +156,24 @@ def _build_contestants() -> list[Contestant]:
 
         def _zoo_lru(_sz):
             """ZooCache has no maxsize — caches everything (unbounded)."""
+
             @zoocache.cacheable
             def fn(x: int) -> int:
                 return x
+
             return fn
 
-        contestants.append(Contestant(
-            name="zoocache",
-            make_lru=_zoo_lru,
-            make_ttl=None,
-            thread_safe=True,
-            available=True,
-            version=getattr(zoocache, "__version__", ""),
-            notes=["No maxsize param (unbounded cache)", "Semantic invalidation, not LRU"],
-        ))
+        contestants.append(
+            Contestant(
+                name="zoocache",
+                make_lru=_zoo_lru,
+                make_ttl=None,
+                thread_safe=True,
+                available=True,
+                version=getattr(zoocache, "__version__", ""),
+                notes=["No maxsize param (unbounded cache)", "Semantic invalidation, not LRU"],
+            )
+        )
     except ImportError:
         contestants.append(Contestant(name="zoocache"))
 
@@ -170,9 +187,7 @@ def _build_contestants() -> list[Contestant]:
 
 def python_info() -> dict:
     """Collect Python build/runtime details."""
-    gil_disabled = getattr(sys.flags, "nogil", False) or sysconfig.get_config_var(
-        "Py_GIL_DISABLED"
-    )
+    gil_disabled = getattr(sys.flags, "nogil", False) or sysconfig.get_config_var("Py_GIL_DISABLED")
     return {
         "version": sys.version.split()[0],
         "implementation": platform.python_implementation(),
@@ -223,7 +238,7 @@ def _time_loop(fn, keys: list[int]) -> float:
 
 
 def verify_correctness(n_ops: int = 50_000) -> bool:
-    from fast_cache import Strategy, cache
+    from warp_cache import Strategy, cache
 
     max_size = 256
     num_keys = 500
@@ -242,7 +257,7 @@ def verify_correctness(n_ops: int = 50_000) -> bool:
         fc_val = fc_fn(k)
         lru_val = lru_fn(k)
         if fc_val != lru_val:
-            print(f"MISMATCH at key={k}: fast_cache={fc_val}, lru_cache={lru_val}")
+            print(f"MISMATCH at key={k}: warp_cache={fc_val}, lru_cache={lru_val}")
             return False
 
     return True
@@ -307,6 +322,7 @@ def bench_threading(
             fn = c.make_lru(max_size)
 
             if c.thread_safe:
+
                 def worker(f=fn):
                     for k in keys_per_thread:
                         f(k)
@@ -423,7 +439,7 @@ def bench_ttl(
 def bench_shared_throughput(
     n_ops: int = 100_000, max_size: int = 256
 ) -> dict[str, dict[str, float]]:
-    from fast_cache import Strategy, cache
+    from warp_cache import Strategy, cache
 
     num_keys = 2000
     keys = zipf_keys(n_ops, num_keys)
@@ -457,7 +473,7 @@ def bench_shared_throughput(
 def _mp_worker(args):
     """Worker for multiprocess benchmark. Runs in a forked child."""
     shm_name, n_ops, num_keys, seed = args
-    from fast_cache._fast_cache_rs import SharedCachedFunction
+    from warp_cache._warp_cache_rs import SharedCachedFunction
 
     fn = SharedCachedFunction(
         lambda x: x,
@@ -489,13 +505,13 @@ def bench_multiprocess(
     for n_procs in process_counts:
         shm_name = f"bench_multiproc_{n_procs}"
         tmpdir = tempfile.gettempdir()
-        shm_dir = os.path.join(tmpdir, "fast_cache")
+        shm_dir = os.path.join(tmpdir, "warp_cache")
         for suffix in (".data", ".lock"):
             p = os.path.join(shm_dir, f"{shm_name}{suffix}")
             if os.path.exists(p):
                 os.unlink(p)
 
-        from fast_cache._fast_cache_rs import SharedCachedFunction
+        from warp_cache._warp_cache_rs import SharedCachedFunction
 
         _init_fn = SharedCachedFunction(
             lambda x: x,
@@ -538,7 +554,7 @@ def bench_multiprocess(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="fast_cache benchmark runner")
+    parser = argparse.ArgumentParser(description="warp_cache benchmark runner")
     parser.add_argument("--tag", required=True, help="Label for this run (e.g. py3.12)")
     parser.add_argument("--quick", action="store_true", help="Skip sustained & TTL benchmarks")
     args = parser.parse_args()

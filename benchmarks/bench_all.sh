@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Run fast_cache benchmarks across multiple Python versions.
+# Run warp_cache benchmarks across multiple Python versions.
 # Replaces the Jupyter notebook orchestration.
 #
 # Usage:
@@ -60,7 +60,7 @@ if $REPORT_ONLY; then
     exit 0
 fi
 
-TMPDIR_BASE=$(mktemp -d "${TMPDIR:-/tmp}/fast_cache_bench_XXXXXX")
+TMPDIR_BASE=$(mktemp -d "${TMPDIR:-/tmp}/warp_cache_bench_XXXXXX")
 WHEELS_DIR="$TMPDIR_BASE/wheels"
 mkdir -p "$WHEELS_DIR"
 
@@ -97,7 +97,7 @@ for ver in $VERSIONS; do
 
     # 3. Build wheel
     echo ""
-    echo "[3/5] Building fast_cache wheel..."
+    echo "[3/5] Building warp_cache wheel..."
     CARGO_BIN="$HOME/.cargo/bin"
     if ! PATH="$CARGO_BIN:$PATH" "$VENV_PYTHON" -m maturin build \
         --release -i "$VENV_PYTHON" -o "$WHEELS_DIR" \
@@ -109,10 +109,10 @@ for ver in $VERSIONS; do
     # 4. Install wheel + bench deps
     echo ""
     echo "[4/5] Installing wheel + dependencies..."
-    WHEEL=$(ls -t "$WHEELS_DIR"/fast_cache-*"$(echo "$ver" | tr -d '.')"-*.whl 2>/dev/null | head -1)
+    WHEEL=$(ls -t "$WHEELS_DIR"/warp_cache-*"$(echo "$ver" | tr -d '.')"-*.whl 2>/dev/null | head -1)
     if [[ -z "$WHEEL" ]]; then
         # Fallback: try any recent wheel
-        WHEEL=$(ls -t "$WHEELS_DIR"/fast_cache-*.whl 2>/dev/null | head -1)
+        WHEEL=$(ls -t "$WHEELS_DIR"/warp_cache-*.whl 2>/dev/null | head -1)
     fi
     if [[ -z "$WHEEL" ]]; then
         echo "  SKIP $label: no wheel found"

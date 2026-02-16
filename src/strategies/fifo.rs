@@ -32,9 +32,12 @@ impl EvictionStrategy for FifoStrategy {
         self.map.insert(key, entry);
     }
 
-    fn get_mut(&mut self, key: &CacheKey) -> Option<&mut CacheEntry> {
+    fn peek(&self, key: &CacheKey) -> Option<&CacheEntry> {
+        self.map.get(key)
+    }
+
+    fn record_access(&mut self, _key: &CacheKey) {
         // FIFO: no reordering on access
-        self.map.get_mut(key)
     }
 
     fn remove(&mut self, key: &CacheKey) -> Option<CacheEntry> {

@@ -9,7 +9,7 @@ Usage:
 import argparse
 import json
 import platform
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 RESULTS_DIR = Path(__file__).resolve().parent / "results"
@@ -53,8 +53,8 @@ def generate_report(data: dict[str, dict]) -> str:
     sections: list[str] = []
 
     # Header
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    sections.append("# fast_cache Benchmark Report\n")
+    now = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
+    sections.append("# warp_cache Benchmark Report\n")
     sections.append(f"Generated: {now}  ")
     sections.append(f"Machine: {platform.machine()} / {platform.system()} {platform.release()}  ")
 
@@ -73,12 +73,14 @@ def generate_report(data: dict[str, dict]) -> str:
         headers = ["Library", "Version", "Available", "Thread-safe"]
         rows = []
         for name, info in first_run["contestants"].items():
-            rows.append([
-                name,
-                info.get("version", ""),
-                "Yes" if info.get("available") else "No",
-                "Yes" if info.get("thread_safe") else "No (+ Lock)",
-            ])
+            rows.append(
+                [
+                    name,
+                    info.get("version", ""),
+                    "Yes" if info.get("available") else "No",
+                    "Yes" if info.get("thread_safe") else "No (+ Lock)",
+                ]
+            )
         sections.append(_md_table(headers, rows))
         sections.append("")
 
@@ -112,9 +114,7 @@ def generate_report(data: dict[str, dict]) -> str:
         if "zoocache_unbounded" in tp:
             zoo_ops = tp["zoocache_unbounded"].get("zoocache")
             if zoo_ops:
-                sections.append(
-                    f"\n*zoocache (unbounded, no maxsize): {_fmt_ops(zoo_ops)} ops/s*"
-                )
+                sections.append(f"\n*zoocache (unbounded, no maxsize): {_fmt_ops(zoo_ops)} ops/s*")
         sections.append("")
 
     # ── Multi-thread scaling ──
@@ -194,7 +194,7 @@ def generate_report(data: dict[str, dict]) -> str:
     # ── Shared backend ──
     tags_with_shared = [t for t, r in data.items() if "shared_throughput" in r]
     if tags_with_shared:
-        sections.append("## Shared Backend — Memory vs Shared (fast_cache only)\n")
+        sections.append("## Shared Backend — Memory vs Shared (warp_cache only)\n")
         headers = ["Version", "Memory (ops/s)", "Shared (ops/s)", "Ratio"]
         rows = []
         for tag in tags_with_shared:
@@ -209,7 +209,7 @@ def generate_report(data: dict[str, dict]) -> str:
     # ── Multi-process ──
     tags_with_mp = [t for t, r in data.items() if "multiprocess" in r]
     if tags_with_mp:
-        sections.append("## Multi-Process Scaling — Shared Backend (fast_cache only)\n")
+        sections.append("## Multi-Process Scaling — Shared Backend (warp_cache only)\n")
         for tag in tags_with_mp:
             py = data[tag]["python"]
             ft = " (free-threaded)" if py["gil_disabled"] else ""
@@ -220,11 +220,13 @@ def generate_report(data: dict[str, dict]) -> str:
             rows = []
             for np_key in sorted(mp, key=int):
                 d = mp[np_key]
-                rows.append([
-                    np_key,
-                    _fmt_ops(d["total_ops_per_sec"]),
-                    f"{d['wall_time']:.2f}",
-                ])
+                rows.append(
+                    [
+                        np_key,
+                        _fmt_ops(d["total_ops_per_sec"]),
+                        f"{d['wall_time']:.2f}",
+                    ]
+                )
             sections.append(_md_table(headers, rows))
             sections.append("")
 
@@ -240,13 +242,23 @@ def generate_report(data: dict[str, dict]) -> str:
         ("FIFO strategy", "Yes", "No", "Yes", "Yes", "No", "No"),
         ("MRU strategy", "Yes", "No", "No", "No", "No", "No"),
         (
-            "Implementation", "Rust (PyO3)", "C (CPython)",
-            "Pure Python", "Rust (PyO3)", "Rust (PyO3)", "Rust (PyO3)",
+            "Implementation",
+            "Rust (PyO3)",
+            "C (CPython)",
+            "Pure Python",
+            "Rust (PyO3)",
+            "Rust (PyO3)",
+            "Rust (PyO3)",
         ),
     ]
     headers = [
-        "Feature", "fast_cache", "lru_cache",
-        "cachetools", "cachebox", "moka_py", "zoocache",
+        "Feature",
+        "warp_cache",
+        "lru_cache",
+        "cachetools",
+        "cachebox",
+        "moka_py",
+        "zoocache",
     ]
     rows = [list(f) for f in features]
     sections.append(_md_table(headers, rows))

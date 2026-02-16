@@ -3,7 +3,7 @@
 ## Basic caching
 
 ```python
-from fast_cache import cache
+from warp_cache import cache
 
 @cache()
 def expensive(x, y):
@@ -14,7 +14,7 @@ expensive(1, 2)  # computes and caches
 expensive(1, 2)  # returns cached result
 ```
 
-**Arguments must be hashable.** Like `functools.lru_cache`, `fast_cache` uses
+**Arguments must be hashable.** Like `functools.lru_cache`, `warp_cache` uses
 `hash()` to build cache keys. Passing unhashable types raises `TypeError`:
 
 ```python
@@ -37,7 +37,7 @@ to hashable equivalents before passing (e.g. `tuple(my_list)`,
 The `Strategy` enum controls how entries are evicted when the cache is full:
 
 ```python
-from fast_cache import cache, Strategy
+from warp_cache import cache, Strategy
 
 @cache(strategy=Strategy.LRU, max_size=256)
 def fetch(url):
@@ -65,7 +65,7 @@ misses `await` the wrapped coroutine.
 
 ```python
 import asyncio
-from fast_cache import cache
+from warp_cache import cache
 
 @cache(max_size=256)
 async def fetch_user(user_id: int) -> dict:
@@ -92,7 +92,7 @@ def get_config(name):
 The `Backend` enum selects where cached data is stored. `Backend` is an `IntEnum`, but the decorator also accepts the strings `"memory"` and `"shared"` for convenience.
 
 ```python
-from fast_cache import cache, Backend
+from warp_cache import cache, Backend
 
 @cache(max_size=256, backend=Backend.MEMORY)   # enum
 @cache(max_size=256, backend="memory")          # equivalent string
@@ -132,14 +132,14 @@ def get_embedding(text: str) -> list[float]:
 
 - Two mmap files are created per decorated function:
   - **Data file** — contains a header, a hash table (open-addressing with linear probing), and a fixed-size slab arena for entries
-  - **Lock file** — holds a POSIX `pthread_rwlock` with `PTHREAD_PROCESS_SHARED`, so multiple processes can coordinate reads and writes
-- File location: `/dev/shm/` on Linux, `$TMPDIR/fast_cache/` on macOS
+  - **Lock file** — holds a seqlock (sequence counter + spinlock) for cross-process synchronization. Reads are optimistic and lock-free; only writes acquire the spinlock
+- File location: `/dev/shm/` on Linux, `$TMPDIR/warp_cache/` on macOS
 - The file name is derived deterministically from the function's `__module__` and `__qualname__`, so the same function in different processes maps to the same cache automatically
 - If an existing cache file has different parameters (capacity, strategy, key/value sizes), it is recreated
 
 **Serialization overhead:**
 
-Both keys and values are serialized with `pickle.dumps` on write and `pickle.loads` on read. This adds significant per-operation cost compared to the memory backend, which stores live Python objects directly. Expect roughly **10-100x** lower throughput depending on the size and complexity of your keys and values. The shared backend is designed for cases where the cached computation is expensive enough (network I/O, ML inference, heavy math) that the serialization cost is negligible in comparison.
+Both keys and values are serialized with `pickle.dumps` on write and `pickle.loads` on read. This adds significant per-operation cost compared to the memory backend, which stores live Python objects directly. Expect roughly **2x** lower throughput depending on the size and complexity of your keys and values — the seqlock made reads near-free; the gap is now dominated by pickle serialization. The shared backend is designed for cases where the cached computation is expensive enough (network I/O, ML inference, heavy math) that the serialization cost is negligible in comparison.
 
 **Size limits:**
 
@@ -162,10 +162,10 @@ def get_large_result(query: str) -> dict:
 | Platform | `backend="memory"` | `backend="shared"` |
 |----------|--------------------|--------------------|
 | Linux (x86_64, aarch64) | Yes | Yes (`/dev/shm/`) |
-| macOS (x86_64, arm64) | Yes | Yes (`$TMPDIR/fast_cache/`) |
+| macOS (x86_64, arm64) | Yes | Yes (`$TMPDIR/warp_cache/`) |
 | Windows (x86_64) | Yes | No |
 
-The shared backend relies on POSIX APIs (`mmap`, `pthread_rwlock` with `PTHREAD_PROCESS_SHARED`) that are not available on Windows. Using `backend="shared"` on Windows raises a `RuntimeError` at decoration time. The memory backend works on all platforms.
+The shared backend relies on POSIX `mmap` which is not available on Windows. The seqlock uses portable atomics rather than platform-specific threading primitives. Using `backend="shared"` on Windows raises a `RuntimeError` at decoration time. The memory backend works on all platforms.
 
 ## Inspecting and clearing the cache
 
@@ -189,7 +189,7 @@ The cache is safe to use from multiple threads with no additional locking:
 
 ```python
 from concurrent.futures import ThreadPoolExecutor
-from fast_cache import cache
+from warp_cache import cache
 
 @cache(max_size=256)
 def work(x):

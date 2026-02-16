@@ -24,8 +24,13 @@ impl EvictionStrategy for LruStrategy {
         self.cache.insert(key, entry);
     }
 
-    fn get_mut(&mut self, key: &CacheKey) -> Option<&mut CacheEntry> {
-        self.cache.get_mut(key)
+    fn peek(&self, key: &CacheKey) -> Option<&CacheEntry> {
+        self.cache.peek(key)
+    }
+
+    fn record_access(&mut self, key: &CacheKey) {
+        // Touches the entry, moving it to the back of the LRU list
+        self.cache.get(key);
     }
 
     fn remove(&mut self, key: &CacheKey) -> Option<CacheEntry> {

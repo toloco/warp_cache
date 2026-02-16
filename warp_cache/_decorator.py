@@ -1,9 +1,8 @@
 import asyncio
 import warnings
-from typing import Optional
 
-from fast_cache._fast_cache_rs import CachedFunction, SharedCachedFunction
-from fast_cache._strategies import Backend, Strategy
+from warp_cache._strategies import Backend, Strategy
+from warp_cache._warp_cache_rs import CachedFunction, SharedCachedFunction
 
 
 class AsyncCachedFunction:
@@ -60,10 +59,10 @@ def _resolve_backend(backend):
 def cache(
     strategy: Strategy = Strategy.LRU,
     max_size: int = 128,
-    ttl: Optional[float] = None,
+    ttl: float | None = None,
     backend: "str | int | Backend" = Backend.MEMORY,
-    max_key_size: Optional[int] = None,
-    max_value_size: Optional[int] = None,
+    max_key_size: int | None = None,
+    max_value_size: int | None = None,
 ):
     """Caching decorator backed by a Rust store.
 

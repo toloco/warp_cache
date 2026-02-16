@@ -1,7 +1,7 @@
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
-from fast_cache import Strategy, cache
+from warp_cache import Strategy, cache
 
 
 def test_concurrent_access():

@@ -5,7 +5,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
-from fast_cache import Strategy, cache
+from warp_cache import Strategy, cache
 
 # ---------------------------------------------------------------------------
 # 1. High-volume insert/get — 100k ops per strategy, verify correctness

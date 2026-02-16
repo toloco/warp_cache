@@ -4,17 +4,20 @@ build-backend = "maturin"
 
 [project]
 name = "warp_cache"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Thread-safe Python caching decorator backed by a Rust extension"
 readme = "README.md"
 license = "MIT"
-requires-python = ">=3.13"
+requires-python = ">=3.10"
 keywords = ["cache", "lru", "ttl", "thread-safe", "rust"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Rust",
     "Topic :: Software Development :: Libraries :: Python Modules",
@@ -41,7 +44,7 @@ features = ["pyo3/extension-module"]
 module-name = "warp_cache._warp_cache_rs"
 
 [tool.ruff]
-target-version = "py313"
+target-version = "py310"
 line-length = 100
 
 [tool.ruff.lint]

@@ -25,7 +25,15 @@ def _cleanup_shm():
 
 
 # Use a fixed shm_name so all processes (even with spawn) share the same cache
-_shared_fn = SharedCachedFunction(lambda x: x * x, 0, 16, None, 512, 4096, "test_multiproc_shared")
+_shared_fn = SharedCachedFunction(
+    lambda x: x * x,
+    0,
+    16,
+    ttl=None,
+    max_key_size=512,
+    max_value_size=4096,
+    shm_name="test_multiproc_shared",
+)
 
 
 def _worker_write(args):

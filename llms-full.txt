@@ -1,0 +1,227 @@
+# warp_cache
+
+> warp_cache is a thread-safe Python caching decorator backed by a Rust extension (PyO3). It provides LRU/MRU/FIFO/LFU eviction, TTL support, async awareness, and a cross-process shared memory backend. It is a drop-in replacement for `functools.lru_cache` with added thread safety and features.
+
+## Installation
+
+```bash
+pip install warp_cache
+```
+
+Prebuilt wheels are available for Linux (x86_64, aarch64), macOS (x86_64, arm64), and Windows (x86_64). Python 3.10+ required.
+
+## Public API
+
+All public names are importable from `warp_cache`:
+
+```python
+from warp_cache import cache, lru_cache, Strategy, Backend, CacheInfo, SharedCacheInfo
+```
+
+### `cache()` decorator
+
+The main decorator. Wraps a function with a Rust-backed cache.
+
+```python
+from warp_cache import cache
+
+@cache(
+    strategy=Strategy.LRU,     # Eviction strategy (LRU, MRU, FIFO, LFU)
+    max_size=128,              # Maximum number of cached entries
+    ttl=None,                  # Time-to-live in seconds (None = no expiry)
+    backend="memory",          # "memory" (in-process) or "shared" (cross-process mmap)
+    max_key_size=512,          # Max serialized key bytes (shared backend only)
+    max_value_size=4096,       # Max serialized value bytes (shared backend only)
+)
+def my_function(x, y):
+    return x + y
+```
+
+All arguments to the decorated function must be hashable.
+
+### `lru_cache()` decorator
+
+Convenience shorthand for `cache(strategy=Strategy.LRU, ...)`. Accepts all the same parameters except `strategy`.
+
+```python
+from warp_cache import lru_cache
+
+@lru_cache(max_size=256, ttl=60.0)
+def my_function(x):
+    return x * x
+```
+
+### `Strategy` enum
+
+Controls eviction when the cache is full. `Strategy` is an `IntEnum`.
+
+| Strategy        | Value | Evicts                   | Best for                             |
+|-----------------|-------|--------------------------|--------------------------------------|
+| `Strategy.LRU`  | `0`   | Least recently used      | General-purpose caching (default)    |
+| `Strategy.MRU`  | `1`   | Most recently used       | Scans where old items are re-accessed|
+| `Strategy.FIFO` | `2`   | Oldest insertion         | Simple age-based rotation            |
+| `Strategy.LFU`  | `3`   | Least frequently used    | Skewed access patterns with hot keys |
+
+### `Backend` enum
+
+Selects where cached data is stored. `Backend` is an `IntEnum`. The decorator also accepts the strings `"memory"` and `"shared"`.
+
+| Backend           | Value | Storage                    | Use case                         |
+|-------------------|-------|----------------------------|----------------------------------|
+| `Backend.MEMORY`  | `0`   | In-process heap (default)  | Single-process applications      |
+| `Backend.SHARED`  | `1`   | Memory-mapped file (mmap)  | Cross-process sharing (Gunicorn, Celery) |
+
+### `CacheInfo` (memory backend)
+
+Returned by `decorated_fn.cache_info()`.
+
+- `hits: int` — number of cache hits
+- `misses: int` — number of cache misses
+- `max_size: int` — maximum capacity
+- `current_size: int` — current number of entries
+
+### `SharedCacheInfo` (shared backend)
+
+Returned by `decorated_fn.cache_info()` when using `backend="shared"`.
+
+- `hits: int` — number of cache hits
+- `misses: int` — number of cache misses
+- `max_size: int` — maximum capacity
+- `current_size: int` — current number of entries
+- `oversize_skips: int` — calls where key or value exceeded size limits
+
+### Methods on decorated functions
+
+- `decorated_fn.cache_info()` — returns `CacheInfo` or `SharedCacheInfo`
+- `decorated_fn.cache_clear()` — removes all entries and resets counters
+
+## Usage examples
+
+### Basic caching
+
+```python
+from warp_cache import cache
+
+@cache(max_size=256)
+def fibonacci(n):
+    if n < 2:
+        return n
+    return fibonacci(n - 1) + fibonacci(n - 2)
+
+fibonacci(80)  # computed and cached
+fibonacci(80)  # instant cache hit
+print(fibonacci.cache_info())
+# CacheInfo(hits=78, misses=81, max_size=256, current_size=81)
+```
+
+### Migrating from functools.lru_cache
+
+```python
+# Before
+from functools import lru_cache
+
+@lru_cache(maxsize=128)
+def compute(x, y):
+    return x + y
+
+# After
+from warp_cache import cache
+
+@cache(max_size=128)
+def compute(x, y):
+    return x + y
+```
+
+Or use the `lru_cache` shorthand:
+
+```python
+from warp_cache import lru_cache
+
+@lru_cache(max_size=128)
+def compute(x, y):
+    return x + y
+```
+
+### TTL (time-to-live)
+
+```python
+@cache(max_size=128, ttl=60.0)  # entries expire after 60 seconds
+def get_config(name):
+    return load_from_database(name)
+```
+
+### Async functions
+
+Async functions are detected automatically. Cache hits return instantly without awaiting.
+
+```python
+import asyncio
+from warp_cache import cache
+
+@cache(max_size=256)
+async def fetch_user(user_id: int) -> dict:
+    await asyncio.sleep(0.1)  # simulate I/O
+    return {"id": user_id}
+
+async def main():
+    user = await fetch_user(42)   # miss — awaits the coroutine
+    user = await fetch_user(42)   # hit — instant return
+```
+
+### Thread safety
+
+The cache is safe to use from multiple threads with no additional locking:
+
+```python
+from concurrent.futures import ThreadPoolExecutor
+from warp_cache import cache
+
+@cache(max_size=256)
+def work(x):
+    return x * x
+
+with ThreadPoolExecutor(max_workers=8) as pool:
+    results = list(pool.map(work, range(100)))
+```
+
+### Shared memory backend (cross-process)
+
+Cached data is shared across processes via mmap. Useful for Gunicorn workers, Celery tasks, or multiprocessing pools.
+
+```python
+from warp_cache import cache
+
+@cache(max_size=1024, backend="shared")
+def get_embedding(text: str) -> list[float]:
+    # computed once, shared across all worker processes
+    return model.encode(text)
+```
+
+Shared backend details:
+- Keys and values are serialized with pickle (fast-path for primitives)
+- File location: `/dev/shm/` on Linux, `$TMPDIR/warp_cache/` on macOS
+- Not available on Windows (`backend="memory"` works everywhere)
+- Monitor oversize skips: `fn.cache_info().oversize_skips`
+
+### Eviction strategies
+
+```python
+from warp_cache import cache, Strategy
+
+@cache(strategy=Strategy.LRU, max_size=256)
+def fetch(url): ...
+
+@cache(strategy=Strategy.LFU, max_size=1000)
+def lookup(key): ...
+
+@cache(strategy=Strategy.FIFO, max_size=100)
+def rotate(item): ...
+```
+
+## Platform support
+
+| Platform                   | `backend="memory"` | `backend="shared"` |
+|----------------------------|---------------------|---------------------|
+| Linux (x86_64, aarch64)   | Yes                 | Yes                 |
+| macOS (x86_64, arm64)     | Yes                 | Yes                 |
+| Windows (x86_64)          | Yes                 | No                  |

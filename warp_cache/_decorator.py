@@ -110,3 +110,21 @@ def cache(
         return inner
 
     return decorator
+
+
+def lru_cache(
+    max_size: int = 128,
+    ttl: float | None = None,
+    backend: "str | int | Backend" = Backend.MEMORY,
+    max_key_size: int | None = None,
+    max_value_size: int | None = None,
+):
+    """Shorthand for ``cache(strategy=Strategy.LRU, ...)``."""
+    return cache(
+        strategy=Strategy.LRU,
+        max_size=max_size,
+        ttl=ttl,
+        backend=backend,
+        max_key_size=max_key_size,
+        max_value_size=max_value_size,
+    )

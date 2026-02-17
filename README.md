@@ -23,7 +23,7 @@ under concurrent load — and **18-24x** faster than pure-Python `cachetools`.
 Prebuilt wheels are available for Linux (x86_64, aarch64), macOS (x86_64, arm64), and Windows (x86_64):
 
 ```bash
-pip install -i https://test.pypi.org/simple/ warp_cache
+pip install warp_cache
 ```
 
 If no wheel is available for your platform, pip will fall back to the source distribution (requires a [Rust toolchain](https://rustup.rs/)).
@@ -75,7 +75,14 @@ Under concurrent load, `warp_cache` delivers **1.3-1.4x** higher throughput than
 - **[Usage guide](docs/usage.md)** — eviction strategies, async, TTL, shared memory, decorator parameters
 - **[Performance](docs/performance.md)** — benchmarks, architecture deep-dive, optimization journey
 - **[Alternatives](docs/alternatives.md)** — comparison with cachebox, moka-py, cachetools, lru_cache
-- **[Development](docs/development.md)** — building from source, running tests
+- **[Examples](examples/)** — runnable scripts for every feature (`uv run examples/<name>.py`)
+- **[llms.txt](llms.txt)** / **[llms-full.txt](llms-full.txt)** — project info for LLMs and AI agents ([spec](https://llmstxt.org/))
+
+## Contributing
+
+Contributions are welcome! See **[CONTRIBUTING.md](CONTRIBUTING.md)** for setup instructions, coding standards, and PR guidelines.
+
+For security issues, please see **[SECURITY.md](SECURITY.md)**.
 
 ## License
 

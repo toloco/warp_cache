@@ -83,7 +83,13 @@ class TestSingleProcessRealistic:
 # --- Multi-process setup (module-level for fork compatibility) ---
 
 _shared_realistic_fn = SharedCachedFunction(
-    _expensive_compute, 0, MAX_SIZE, None, 512, 4096, "test_realistic_mp"
+    _expensive_compute,
+    0,
+    MAX_SIZE,
+    ttl=None,
+    max_key_size=512,
+    max_value_size=4096,
+    shm_name="test_realistic_mp",
 )
 
 

@@ -1,0 +1,15 @@
+# warp_cache
+
+> warp_cache is a thread-safe Python caching decorator backed by a Rust extension (PyO3). It provides LRU/MRU/FIFO/LFU eviction, TTL support, async awareness, and a cross-process shared memory backend. It is a drop-in replacement for `functools.lru_cache` with added thread safety and features.
+
+## Docs
+
+- [Usage guide](https://github.com/tolo/warp_cache/blob/main/docs/usage.md): Eviction strategies, async, TTL, shared memory, decorator parameters
+- [Performance](https://github.com/tolo/warp_cache/blob/main/docs/performance.md): Benchmarks and architecture deep-dive
+- [Alternatives](https://github.com/tolo/warp_cache/blob/main/docs/alternatives.md): Comparison with cachebox, moka-py, cachetools, lru_cache
+- [Development](https://github.com/tolo/warp_cache/blob/main/docs/development.md): Building from source, running tests
+
+## Optional
+
+- [Examples](https://github.com/tolo/warp_cache/tree/main/examples): Runnable examples for every feature
+- [Contributing](https://github.com/tolo/warp_cache/blob/main/CONTRIBUTING.md): Contributing guidelines

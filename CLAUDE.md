@@ -51,7 +51,7 @@ make test PYTHON=3.13   # Specific version
 
 ### Python layer (`warp_cache/`)
 
-- **`_decorator.py`** — `cache()` factory: dispatches to `CachedFunction` (memory) or `SharedCachedFunction` (shared). Auto-detects async functions and wraps with `AsyncCachedFunction` (cache hit in Rust, only misses `await` the coroutine)
+- **`_decorator.py`** — `cache()` factory: dispatches to `CachedFunction` (memory) or `SharedCachedFunction` (shared). Auto-detects async functions and wraps with `AsyncCachedFunction` (cache hit in Rust, only misses `await` the coroutine). Also exports `lru_cache()` — a convenience shorthand for `cache(strategy=Strategy.LRU, ...)`
 - **`_strategies.py`** — `Strategy(IntEnum)`: LRU=0, MRU=1, FIFO=2, LFU=3
 
 ### Key design decisions
@@ -67,5 +67,5 @@ make test PYTHON=3.13   # Specific version
 
 ## Linting
 
-- Python: ruff (rules: E, F, W, I, UP, B, SIM; line-length=100; target py313)
+- Python: ruff (rules: E, F, W, I, UP, B, SIM; line-length=100; target py310)
 - Rust: `cargo clippy -- -D warnings`

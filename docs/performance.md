@@ -12,7 +12,7 @@ Python: fn(42)
        ├─ hash(args)           via ffi::PyObject_Hash
        ├─ HashMap lookup       Rust hashbrown, precomputed hash
        ├─ equality check       via ffi::PyObject_RichCompareBool
-       ├─ RwLock (write)       parking_lot, ~8ns uncontended
+       ├─ RwLock (read)        parking_lot, ~8ns uncontended
        └─ return cached value
 ```
 
@@ -20,7 +20,7 @@ No Python wrapper function. No serialization. No intermediate key object.
 
 ## Single-threaded throughput vs cache size
 
-| Cache Size | warp_cache (ops/s) | cachetools (ops/s) | lru_cache (ops/s) | fc/ct | fc/lru |
+| Cache Size | warp_cache (ops/s) | cachetools (ops/s) | lru_cache (ops/s) | wc/ct | wc/lru |
 |---:|---:|---:|---:|---:|---:|
 | 32 | 12,350,000 | 610,000 | 22,230,000 | 20.2x | 0.56x |
 | 64 | 13,480,000 | 654,000 | 23,290,000 | 20.6x | 0.58x |
@@ -47,7 +47,7 @@ No Python wrapper function. No serialization. No intermediate key object.
 
 ## Multi-threaded throughput (cache size = 256)
 
-| Threads | warp_cache (ops/s) | cachetools + Lock (ops/s) | lru_cache + Lock (ops/s) | fc/ct | fc/lru |
+| Threads | warp_cache (ops/s) | cachetools + Lock (ops/s) | lru_cache + Lock (ops/s) | wc/ct | wc/lru |
 |---:|---:|---:|---:|---:|---:|
 | 1 | 15,920,000 | 809,000 | 12,930,000 | 19.7x | 1.23x |
 | 2 | 15,630,000 | 810,000 | 12,670,000 | 19.3x | 1.23x |
@@ -72,7 +72,7 @@ At cache size 128, a cache hit takes ~64ns vs `lru_cache`'s ~39ns:
 | **Lock acquire + release** | **0ns** | **~8ns** | **+8ns** |
 | Refcount management | ~2ns | ~5ns | +3ns |
 | Return value | ~2ns | ~2ns | 0 |
-| **Total** | **~39ns** | **~60ns** | **+21ns** |
+| **Total** | **~39ns** | **~60ns** | **+21ns (~34ns measured)** |
 
 Three categories:
 

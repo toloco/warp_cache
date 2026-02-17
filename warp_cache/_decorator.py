@@ -78,6 +78,15 @@ def cache(
                  Also accepts the strings "memory" and "shared".
         max_key_size: Max serialized key size in bytes (shared backend only).
         max_value_size: Max serialized value size in bytes (shared backend only).
+
+    Note:
+        Eviction ordering (LRU, MRU, LFU) is approximate under sustained
+        hit-only workloads.  The in-process backend batches ordering updates
+        (up to 64) under a read lock and replays them on the next write lock
+        acquisition.  If the batch fills before a cache miss triggers a write
+        lock, additional ordering updates are dropped.  In practice this
+        rarely affects eviction quality, but under pathological access
+        patterns the evicted entry may not be the theoretically optimal one.
     """
     resolved_backend = _resolve_backend(backend)
 

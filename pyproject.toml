@@ -37,7 +37,7 @@ dev = [
 ]
 
 [project.urls]
-Repository = "https://github.com/tolo/warp_cache"
+Repository = "https://github.com/toloco/warp_cache"
 
 [tool.maturin]
 features = ["pyo3/extension-module"]

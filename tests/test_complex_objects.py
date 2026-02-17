@@ -3,10 +3,15 @@
 import contextlib
 import glob
 import os
+import sys
 import tempfile
 from dataclasses import dataclass
 
+import pytest
+
 from warp_cache import cache
+
+_skip_on_windows = pytest.mark.skipif(sys.platform == "win32", reason="shared memory is Unix-only")
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -244,6 +249,7 @@ class TestMemoryComplexKeys:
 # ===========================================================================
 
 
+@_skip_on_windows
 class TestSharedComplexValues:
     def setup_method(self):
         _cleanup_shm()
@@ -315,6 +321,7 @@ class TestSharedComplexValues:
         assert mixed() == result
 
 
+@_skip_on_windows
 class TestSharedComplexKeys:
     def setup_method(self):
         _cleanup_shm()

@@ -1,4 +1,5 @@
 import asyncio
+import sys
 
 import pytest
 
@@ -143,6 +144,7 @@ async def test_async_strategies():
 # ── Shared backend ───────────────────────────────────────────────────────
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="shared memory is Unix-only")
 @pytest.mark.asyncio
 async def test_async_shared_backend():
     call_count = 0

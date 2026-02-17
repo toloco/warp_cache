@@ -8,10 +8,13 @@ import contextlib
 import glob
 import multiprocessing
 import os
+import subprocess
 import sys
 import tempfile
+import textwrap
 
 import pytest
+
 from warp_cache._warp_cache_rs import SharedCachedFunction
 
 
@@ -104,3 +107,57 @@ class TestMultiprocess:
 
         info = _shared_fn.cache_info()
         assert info.current_size == 16  # still at capacity
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="No shared memory on Windows")
+    def test_cross_process_str_key_different_hashseed(self):
+        """String keys must be found across processes with different PYTHONHASHSEED.
+
+        Python randomizes hash() for str/bytes per process.  The shared
+        backend must hash deterministically (from serialized bytes) so that
+        a value written by one process is found by another.
+        """
+        shm_name = "test_str_key_hashseed"
+
+        # Parent writes a string-keyed entry
+        parent_fn = SharedCachedFunction(
+            lambda x: f"hello-{x}",
+            0,
+            16,
+            ttl=None,
+            max_key_size=512,
+            max_value_size=4096,
+            shm_name=shm_name,
+        )
+        parent_fn.cache_clear()
+        result = parent_fn("world")
+        assert result == "hello-world"
+
+        # Child process with a *different* PYTHONHASHSEED reads the same key
+        child_script = textwrap.dedent(f"""\
+            import sys
+            from warp_cache._warp_cache_rs import SharedCachedFunction
+
+            fn = SharedCachedFunction(
+                lambda x: f"hello-{{x}}",
+                0, 16, ttl=None,
+                max_key_size=512, max_value_size=4096,
+                shm_name="{shm_name}",
+            )
+            val = fn.get("world")
+            if val is None:
+                print("MISS", flush=True)
+                sys.exit(1)
+            print(f"HIT:{{val}}", flush=True)
+        """)
+
+        env = os.environ.copy()
+        env["PYTHONHASHSEED"] = "12345"
+        proc = subprocess.run(
+            [sys.executable, "-c", child_script],
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=10,
+        )
+        assert proc.returncode == 0, f"Child failed: {proc.stderr}"
+        assert proc.stdout.strip() == "HIT:hello-world"

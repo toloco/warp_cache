@@ -1,5 +1,6 @@
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
+use std::hash::{BuildHasher, Hasher};
+
+use ahash::RandomState;
 
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyTuple};
@@ -101,7 +102,7 @@ impl SharedCachedFunction {
         // Check size limits
         {
             let cache = self.cache.lock();
-            if key_bytes.len() > cache.info().max_size && cache.is_oversize(&key_bytes, &[]) {
+            if cache.is_oversize(&key_bytes, &[]) {
                 cache.record_oversize_skip();
                 drop(cache);
                 return self
@@ -207,23 +208,32 @@ impl SharedCachedFunction {
             _ => args.clone().unbind().into(),
         };
 
+        // Serialize key first (deterministic bytes for cross-process hashing)
+        let key_bound = key_obj.bind(py);
+        let key_bytes = if let Some(bytes) = serde::serialize(py, key_bound)? {
+            bytes
+        } else {
+            // Fallback: pickle
+            let pickle_obj = self.pickle_dumps.bind(py).call1((&key_obj,))?;
+            let pickle_bytes: &[u8] = pickle_obj.extract()?;
+            serde::wrap_pickle(pickle_bytes)
+        };
+
+        // Hash the serialized bytes — deterministic across processes
+        // (Python's hash() is randomized per-process for str/bytes)
         let key_hash = {
-            let py_hash: isize = key_obj.bind(py).hash()?;
-            let mut hasher = DefaultHasher::new();
-            py_hash.hash(&mut hasher);
+            let state = RandomState::with_seeds(
+                0x517cc1b727220a95,
+                0x6c62272e07bb0142,
+                0x0f1e2d3c4b5a6978,
+                0xa1b2c3d4e5f60718,
+            );
+            let mut hasher = state.build_hasher();
+            hasher.write(&key_bytes);
             hasher.finish()
         };
 
-        // Fast path: serialize key without pickle
-        let key_bound = key_obj.bind(py);
-        if let Some(bytes) = serde::serialize(py, key_bound)? {
-            return Ok((key_hash, bytes));
-        }
-
-        // Fallback: pickle
-        let pickle_obj = self.pickle_dumps.bind(py).call1((&key_obj,))?;
-        let pickle_bytes: &[u8] = pickle_obj.extract()?;
-        Ok((key_hash, serde::wrap_pickle(pickle_bytes)))
+        Ok((key_hash, key_bytes))
     }
 
     /// Serialize and store a result, checking value size limits.
@@ -283,10 +293,16 @@ fn derive_shm_name(py: Python<'_>, fn_obj: &Py<PyAny>) -> PyResult<String> {
         .and_then(|q| q.extract::<String>())
         .unwrap_or_else(|_| "unknown".to_string());
 
-    // Hash for uniqueness
-    let mut hasher = DefaultHasher::new();
-    module.hash(&mut hasher);
-    qualname.hash(&mut hasher);
+    // Hash for uniqueness (fixed-seed ahash for cross-process determinism)
+    let state = RandomState::with_seeds(
+        0x517cc1b727220a95,
+        0x6c62272e07bb0142,
+        0x0f1e2d3c4b5a6978,
+        0xa1b2c3d4e5f60718,
+    );
+    let mut hasher = state.build_hasher();
+    hasher.write(module.as_bytes());
+    hasher.write(qualname.as_bytes());
     let hash = hasher.finish();
 
     Ok(format!("warp_cache_{module}_{qualname}_{hash:016x}"))

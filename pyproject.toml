@@ -34,10 +34,11 @@ dev = [
     "cachebox>=4.0",
     "moka-py>=0.3",
     "zoocache>=0.1",
+    "ty>=0.0.17",
 ]
 
 [project.urls]
-Repository = "https://github.com/tolo/warp_cache"
+Repository = "https://github.com/toloco/warp_cache"
 
 [tool.maturin]
 features = ["pyo3/extension-module"]
@@ -53,6 +54,12 @@ select = ["E", "F", "W", "I", "UP", "B", "SIM"]
 [tool.ruff.lint.per-file-ignores]
 "benchmarks/*" = ["B023"]
 "tests/*" = ["B023"]
+
+[tool.ty.src]
+include = ["warp_cache"]
+
+[tool.ty.environment]
+python-version = "3.10"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -9,9 +9,9 @@ import sys
 import tempfile
 
 import pytest
-from warp_cache._warp_cache_rs import SharedCachedFunction
 
 from warp_cache import Strategy, cache
+from warp_cache._warp_cache_rs import SharedCachedFunction
 
 
 def _cleanup_shm():

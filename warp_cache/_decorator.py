@@ -1,8 +1,15 @@
 import asyncio
 import warnings
+from collections.abc import Callable
+from typing import Any
 
 from warp_cache._strategies import Backend, Strategy
-from warp_cache._warp_cache_rs import CachedFunction, SharedCachedFunction
+from warp_cache._warp_cache_rs import (
+    CachedFunction,
+    CacheInfo,
+    SharedCachedFunction,
+    SharedCacheInfo,
+)
 
 
 class AsyncCachedFunction:
@@ -12,16 +19,18 @@ class AsyncCachedFunction:
     async function is only awaited on cache miss.
     """
 
-    def __init__(self, fn, inner):
+    def __init__(
+        self, fn: Callable[..., Any], inner: CachedFunction | SharedCachedFunction
+    ) -> None:
         self._fn = fn
         self._inner = inner
         self.__wrapped__ = fn
         self.__name__ = getattr(fn, "__name__", repr(fn))
         self.__qualname__ = getattr(fn, "__qualname__", self.__name__)
-        self.__module__ = getattr(fn, "__module__", None)
+        self.__module__ = getattr(fn, "__module__", __name__)
         self.__doc__ = getattr(fn, "__doc__", None)
 
-    async def __call__(self, *args, **kwargs):
+    async def __call__(self, *args: Any, **kwargs: Any) -> Any:
         cached = self._inner.get(*args, **kwargs)
         if cached is not None:
             return cached
@@ -29,20 +38,20 @@ class AsyncCachedFunction:
         self._inner.set(result, *args, **kwargs)
         return result
 
-    def cache_info(self):
+    def cache_info(self) -> CacheInfo | SharedCacheInfo:
         return self._inner.cache_info()
 
-    def cache_clear(self):
+    def cache_clear(self) -> None:
         return self._inner.cache_clear()
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f"<AsyncCachedFunction {self.__qualname__}>"
 
 
 _BACKEND_STR_MAP = {"memory": Backend.MEMORY, "shared": Backend.SHARED}
 
 
-def _resolve_backend(backend):
+def _resolve_backend(backend: str | int | Backend) -> Backend:
     """Accept Backend enum, int, or string and return a Backend member."""
     if isinstance(backend, Backend):
         return backend
@@ -60,10 +69,10 @@ def cache(
     strategy: Strategy = Strategy.LRU,
     max_size: int = 128,
     ttl: float | None = None,
-    backend: "str | int | Backend" = Backend.MEMORY,
+    backend: str | int | Backend = Backend.MEMORY,
     max_key_size: int | None = None,
     max_value_size: int | None = None,
-):
+) -> Callable[[Callable[..., Any]], CachedFunction | SharedCachedFunction | AsyncCachedFunction]:
     """Caching decorator backed by a Rust store.
 
     Supports both sync and async functions. The async detection happens
@@ -78,6 +87,15 @@ def cache(
                  Also accepts the strings "memory" and "shared".
         max_key_size: Max serialized key size in bytes (shared backend only).
         max_value_size: Max serialized value size in bytes (shared backend only).
+
+    Note:
+        Eviction ordering (LRU, MRU, LFU) is approximate under sustained
+        hit-only workloads.  The in-process backend batches ordering updates
+        (up to 64) under a read lock and replays them on the next write lock
+        acquisition.  If the batch fills before a cache miss triggers a write
+        lock, additional ordering updates are dropped.  In practice this
+        rarely affects eviction quality, but under pathological access
+        patterns the evicted entry may not be the theoretically optimal one.
     """
     resolved_backend = _resolve_backend(backend)
 
@@ -115,10 +133,10 @@ def cache(
 def lru_cache(
     max_size: int = 128,
     ttl: float | None = None,
-    backend: "str | int | Backend" = Backend.MEMORY,
+    backend: str | int | Backend = Backend.MEMORY,
     max_key_size: int | None = None,
     max_value_size: int | None = None,
-):
+) -> Callable[[Callable[..., Any]], CachedFunction | SharedCachedFunction | AsyncCachedFunction]:
     """Shorthand for ``cache(strategy=Strategy.LRU, ...)``."""
     return cache(
         strategy=Strategy.LRU,

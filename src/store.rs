@@ -13,6 +13,12 @@ use crate::strategies::lru::LruStrategy;
 use crate::strategies::mru::MruStrategy;
 use crate::strategies::StrategyEnum;
 
+/// Maximum number of deferred ordering updates buffered before a write lock
+/// is acquired.  Cache hits under the read lock append to this log; when a
+/// write lock is taken (on miss or when the log is full), the log is drained
+/// and ordering is replayed.  If the log fills up between write-lock
+/// acquisitions, additional hit-ordering updates are silently dropped — this
+/// makes eviction ordering *approximate* under sustained hit-only workloads.
 const ACCESS_LOG_CAPACITY: usize = 64;
 
 struct CacheStoreInner {

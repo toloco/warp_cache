@@ -15,6 +15,7 @@ hashlink = "0.9"
 [target.'cfg(not(target_os = "windows"))'.dependencies]
 memmap2 = "0.9"
 libc = "0.2"
+ahash = "0.8"
 
 [profile.release]
 lto = "fat"

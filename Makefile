@@ -1,4 +1,4 @@
-.PHONY: help fmt lint build build-debug test test-rust test-only bench bench-quick bench-all bench-report clean publish publish-test setup all
+.PHONY: help fmt lint typecheck build build-debug test test-rust test-only bench bench-quick bench-all bench-report clean publish publish-test setup all
 
 # Optional: specify Python version, e.g. make build PYTHON=3.14
 PYTHON ?=
@@ -19,9 +19,13 @@ fmt: ## Format Python (ruff) and Rust (cargo fmt)
 	cargo fmt
 
 # ── Lint ─────────────────────────────────────────────────────────────────────
-lint: ## Lint Python (ruff) and Rust (clippy)
+lint: ## Lint Python (ruff), type-check (ty), and Rust (clippy)
 	uv run $(UV_PYTHON) ruff check warp_cache/ tests/ benchmarks/
+	uv run $(UV_PYTHON) ty check
 	cargo clippy -- -D warnings
+
+typecheck: ## Type-check Python (ty)
+	uv run $(UV_PYTHON) ty check
 
 # ── Build ────────────────────────────────────────────────────────────────────
 build: ## Build the Rust extension (release)

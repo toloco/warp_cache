@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from typing import Any
 
 class CacheInfo:
@@ -9,6 +10,7 @@ class CacheInfo:
     def max_size(self) -> int: ...
     @property
     def current_size(self) -> int: ...
+    def __repr__(self) -> str: ...
 
 class SharedCacheInfo:
     @property
@@ -21,11 +23,12 @@ class SharedCacheInfo:
     def current_size(self) -> int: ...
     @property
     def oversize_skips(self) -> int: ...
+    def __repr__(self) -> str: ...
 
 class CachedFunction:
     def __init__(
         self,
-        fn_obj: Any,
+        fn_obj: Callable[..., Any],
         strategy: int,
         max_size: int,
         ttl: float | None = None,
@@ -39,7 +42,7 @@ class CachedFunction:
 class SharedCachedFunction:
     def __init__(
         self,
-        fn_obj: Any,
+        fn_obj: Callable[..., Any],
         strategy: int,
         max_size: int,
         ttl: float | None = None,

@@ -3,7 +3,7 @@
 # Optional: specify Python version, e.g. make build PYTHON=3.14
 PYTHON ?=
 UV_PYTHON := $(if $(PYTHON),--python $(PYTHON),)
-SUPPORTED_PYTHONS ?= 3.10 3.11 3.12 3.13 3.14
+SUPPORTED_PYTHONS ?= 3.9 3.10 3.11 3.12 3.13 3.14
 
 help: ## Show this help
 	@awk 'BEGIN {FS = ":.*##"} /^[a-zA-Z_-]+:.*##/ {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)

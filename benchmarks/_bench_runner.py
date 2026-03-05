@@ -477,7 +477,6 @@ def _mp_worker(args):
 
     fn = SharedCachedFunction(
         lambda x: x,
-        0,
         512,
         None,
         512,
@@ -515,7 +514,6 @@ def bench_multiprocess(
 
         _init_fn = SharedCachedFunction(
             lambda x: x,
-            0,
             max_size,
             None,
             512,

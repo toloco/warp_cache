@@ -51,13 +51,15 @@ def app(environ, start_response):
 
     if path == "/stats":
         info = expensive_compute.cache_info()
-        body = json.dumps({
-            "pid": os.getpid(),
-            "hits": info.hits,
-            "misses": info.misses,
-            "max_size": info.max_size,
-            "current_size": info.current_size,
-        })
+        body = json.dumps(
+            {
+                "pid": os.getpid(),
+                "hits": info.hits,
+                "misses": info.misses,
+                "max_size": info.max_size,
+                "current_size": info.current_size,
+            }
+        )
         start_response("200 OK", [("Content-Type", "application/json")])
         return [body.encode()]
 

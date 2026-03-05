@@ -1,4 +1,4 @@
-.PHONY: help fmt lint typecheck build build-debug test test-rust test-only bench bench-quick bench-all bench-report clean publish publish-test setup all
+.PHONY: help fmt lint typecheck build build-debug test test-rust test-only bench bench-quick bench-all bench-report bench-sieve clean publish publish-test setup all
 
 # Optional: specify Python version, e.g. make build PYTHON=3.14
 PYTHON ?=
@@ -61,6 +61,9 @@ bench-quick: build ## Quick benchmarks (skip sustained/TTL)
 
 bench-all: ## Run benchmarks across Python versions + generate report
 	bash benchmarks/bench_all.sh
+
+bench-sieve: build ## Run SIEVE eviction quality benchmarks
+	uv run $(UV_PYTHON) python benchmarks/bench_sieve.py
 
 bench-report: ## Generate report from existing results
 	uv run python benchmarks/_report_generator.py

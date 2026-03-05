@@ -15,7 +15,7 @@ Prebuilt wheels are available for Linux (x86_64, aarch64), macOS (x86_64, arm64)
 All public names are importable from `warp_cache`:
 
 ```python
-from warp_cache import cache, lru_cache, Backend, CacheInfo, SharedCacheInfo
+from warp_cache import cache, Backend, CacheInfo, SharedCacheInfo
 ```
 
 ### `cache()` decorator
@@ -37,18 +37,6 @@ def my_function(x, y):
 ```
 
 All arguments to the decorated function must be hashable.
-
-### `lru_cache()` decorator
-
-Convenience shorthand for `cache(...)`. Accepts all the same parameters.
-
-```python
-from warp_cache import lru_cache
-
-@lru_cache(max_size=256, ttl=60.0)
-def my_function(x):
-    return x * x
-```
 
 ### `Backend` enum
 
@@ -116,16 +104,6 @@ def compute(x, y):
 from warp_cache import cache
 
 @cache(max_size=128)
-def compute(x, y):
-    return x + y
-```
-
-Or use the `lru_cache` shorthand:
-
-```python
-from warp_cache import lru_cache
-
-@lru_cache(max_size=128)
 def compute(x, y):
     return x + y
 ```

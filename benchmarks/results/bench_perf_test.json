@@ -1,94 +1,165 @@
 {
   "python": {
-    "version": "3.12.9",
+    "version": "3.13.2",
     "implementation": "CPython",
     "build": "main",
-    "compiler": "Clang 16.0.0 (clang-1600.0.26.6)",
+    "compiler": "Clang 20.1.0 ",
     "arch": "arm64",
     "gil_disabled": false
   },
+  "contestants": {
+    "warp_cache": {
+      "version": "0.1.0",
+      "available": true,
+      "thread_safe": true
+    },
+    "lru_cache": {
+      "version": "3.13.2",
+      "available": true,
+      "thread_safe": false
+    },
+    "cachetools": {
+      "version": "7.0.1",
+      "available": true,
+      "thread_safe": false
+    },
+    "cachebox": {
+      "version": "5.2.2",
+      "available": true,
+      "thread_safe": true
+    },
+    "moka_py": {
+      "version": "0.3.0",
+      "available": true,
+      "thread_safe": true
+    },
+    "zoocache": {
+      "version": "",
+      "available": true,
+      "thread_safe": true
+    }
+  },
   "throughput": {
     "32": {
-      "warp_cache": 12822156.712211879,
-      "lru_cache": 19066838.388641227
+      "warp_cache": 14308112.647545936,
+      "lru_cache": 20731653.35349717,
+      "cachetools": 590043.0263509648,
+      "cachebox": 1063028.2749105138,
+      "moka_py": 2931423.0224506822
     },
     "64": {
-      "warp_cache": 13402280.021351445,
-      "lru_cache": 21207972.191766735
+      "warp_cache": 14885289.459090889,
+      "lru_cache": 22307939.300232273,
+      "cachetools": 631269.1257652182,
+      "cachebox": 1139179.766485533,
+      "moka_py": 3256193.2469199277
     },
     "128": {
-      "warp_cache": 14090131.182621641,
-      "lru_cache": 24097593.224030606
+      "warp_cache": 16611295.759392038,
+      "lru_cache": 25202140.06232663,
+      "cachetools": 696514.8444739614,
+      "cachebox": 1224619.7554149416,
+      "moka_py": 3390199.1776521862
     },
     "256": {
-      "warp_cache": 14622732.81993702,
-      "lru_cache": 27449587.456561457
+      "warp_cache": 17321641.27490993,
+      "lru_cache": 28052458.405218985,
+      "cachetools": 801508.1691904534,
+      "cachebox": 1483106.483002092,
+      "moka_py": 3715003.4996983386
     },
     "512": {
-      "warp_cache": 17238653.85558022,
-      "lru_cache": 32661507.840447053
+      "warp_cache": 18385732.768209964,
+      "lru_cache": 35370584.395680524,
+      "cachetools": 930603.3537709542,
+      "cachebox": 1770685.8420114717,
+      "moka_py": 4033308.3526122873
     },
     "1024": {
-      "warp_cache": 17417178.767218716,
-      "lru_cache": 36530787.93597052
+      "warp_cache": 19667942.14357153,
+      "lru_cache": 40264392.31897666,
+      "cachetools": 1139012.6952039886,
+      "cachebox": 2352242.422646535,
+      "moka_py": 4385996.840230291
+    },
+    "zoocache_unbounded": {
+      "zoocache": 1170969.3324545408
     }
   },
   "threading": {
     "1": {
-      "warp_cache": 15348605.154510036,
-      "lru_cache": 9897682.694595613
+      "warp_cache": 17748720.28376184,
+      "lru_cache": 11837589.205750767,
+      "cachetools": 768186.5788631366,
+      "cachebox": 1506347.3708151765,
+      "moka_py": 3558634.3914518896
     },
     "2": {
-      "warp_cache": 14461665.21879856,
-      "lru_cache": 10031893.421193613
+      "warp_cache": 17407070.62151973,
+      "lru_cache": 11974674.043475201,
+      "cachetools": 771673.906565188,
+      "cachebox": 1497026.537937484,
+      "moka_py": 3527404.1741586165
     },
     "4": {
-      "warp_cache": 15218383.795245877,
-      "lru_cache": 9442388.257813832
+      "warp_cache": 17555024.086381514,
+      "lru_cache": 12015380.66040378,
+      "cachetools": 786849.9001890247,
+      "cachebox": 1378581.426968127,
+      "moka_py": 3511518.554108022
     },
     "8": {
-      "warp_cache": 15527448.796966495,
-      "lru_cache": 10113864.933091491
+      "warp_cache": 17221583.30307671,
+      "lru_cache": 11728713.89071519,
+      "cachetools": 782671.1412021917,
+      "cachebox": 1510555.9467995588,
+      "moka_py": 3586725.442256531
     },
     "16": {
-      "warp_cache": 15591099.080845982,
-      "lru_cache": 9403578.054758623
+      "warp_cache": 16575273.326457018,
+      "lru_cache": 11496730.66693745,
+      "cachetools": 780772.4359686638,
+      "cachebox": 1454955.4879910185,
+      "moka_py": 3559109.3465307606
     },
     "32": {
-      "warp_cache": 14465411.925485857,
-      "lru_cache": 9379030.353846923
+      "warp_cache": 16080508.045336932,
+      "lru_cache": 11541013.840239659,
+      "cachetools": 765631.8108660043,
+      "cachebox": 1432799.0458399756,
+      "moka_py": 3619969.6467658766
     }
   },
   "shared_throughput": {
     "memory": {
-      "ops_per_sec": 14439042.425839456,
-      "hit_rate": 0.6492
+      "ops_per_sec": 17226404.24790721,
+      "hit_rate": 0.71241
     },
     "shared": {
-      "ops_per_sec": 2756162.268104078,
-      "hit_rate": 0.6492
+      "ops_per_sec": 9184809.588599356,
+      "hit_rate": 0.72338
     }
   },
   "multiprocess": {
     "1": {
-      "total_ops_per_sec": 2289040.588441179,
-      "per_process_avg_ops_per_sec": 3060469.522058054,
-      "wall_time": 0.21843212502426468
+      "total_ops_per_sec": 4847480.0988956,
+      "per_process_avg_ops_per_sec": 9873877.600975463,
+      "wall_time": 0.10314637498231605
     },
     "2": {
-      "total_ops_per_sec": 167250.60123514832,
-      "per_process_avg_ops_per_sec": 84539.2184667449,
-      "wall_time": 2.98952587498934
+      "total_ops_per_sec": 7493396.408961757,
+      "per_process_avg_ops_per_sec": 6437570.497444544,
+      "wall_time": 0.06672541698208079
     },
     "4": {
-      "total_ops_per_sec": 122304.62893978224,
-      "per_process_avg_ops_per_sec": 30728.17824523134,
-      "wall_time": 4.088152707990957
+      "total_ops_per_sec": 7449816.1705269,
+      "per_process_avg_ops_per_sec": 2558620.88379943,
+      "wall_time": 0.06711575004737824
     },
     "8": {
-      "total_ops_per_sec": 116384.68773514514,
-      "per_process_avg_ops_per_sec": 14602.230670399847,
-      "wall_time": 4.29609779198654
+      "total_ops_per_sec": 6494188.215989986,
+      "per_process_avg_ops_per_sec": 999356.3007887901,
+      "wall_time": 0.07699191698338836
     }
   }
 }

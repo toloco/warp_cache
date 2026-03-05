@@ -9,6 +9,7 @@ Usage:
 """
 
 import argparse
+import asyncio
 import functools
 import json
 import platform
@@ -36,6 +37,7 @@ class Contestant:
     name: str
     make_lru: Callable[[int], Callable] | None = None
     make_ttl: Callable[[int, float], Callable] | None = None
+    make_async_lru: Callable[[int], Callable] | None = None
     thread_safe: bool = False
     available: bool = False
     version: str = ""
@@ -43,6 +45,10 @@ class Contestant:
 
 
 def _identity(x: int) -> int:
+    return x
+
+
+async def _async_identity(x: int) -> int:
     return x
 
 
@@ -57,6 +63,7 @@ def _build_contestants() -> list[Contestant]:
             name="warp_cache",
             make_lru=lambda sz: cache(max_size=sz)(_identity),
             make_ttl=lambda sz, ttl: cache(max_size=sz, ttl=ttl)(_identity),
+            make_async_lru=lambda sz: cache(max_size=sz)(_async_identity),
             thread_safe=True,
             available=True,
             version="0.1.0",
@@ -137,11 +144,19 @@ def _build_contestants() -> list[Contestant]:
 
             return fn
 
+        def _moka_async_lru(sz):
+            @moka_py.cached(maxsize=sz)
+            async def fn(x: int) -> int:
+                return x
+
+            return fn
+
         contestants.append(
             Contestant(
                 name="moka_py",
                 make_lru=_moka_lru,
                 make_ttl=_moka_ttl,
+                make_async_lru=_moka_async_lru,
                 thread_safe=True,
                 available=True,
                 version=getattr(moka_py, "VERSION", ""),
@@ -432,7 +447,51 @@ def bench_ttl(
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Benchmark 6 — Shared backend: single-process throughput
+# Benchmark 6 — Async throughput
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def bench_async_throughput(
+    contestants: list[Contestant],
+    cache_sizes: list[int],
+    n_ops: int = 100_000,
+) -> dict:
+    """Benchmark async cached function throughput (cache hits via event loop)."""
+    num_keys = 2000
+    keys = zipf_keys(n_ops, num_keys)
+
+    async_contestants = [c for c in contestants if c.available and c.make_async_lru is not None]
+    results: dict[str, dict[str, float]] = {}
+
+    for sz in cache_sizes:
+        sz_results: dict[str, float] = {}
+        for c in async_contestants:
+            fn = c.make_async_lru(sz)
+
+            async def _run(f=fn):
+                for k in keys:
+                    await f(k)
+
+            t0 = time.perf_counter()
+            asyncio.run(_run())
+            elapsed = time.perf_counter() - t0
+            sz_results[c.name] = n_ops / elapsed
+
+        results[str(sz)] = sz_results
+
+    # Also measure sync for comparison (same contestants that have async)
+    sync_results: dict[str, float] = {}
+    for c in async_contestants:
+        fn = c.make_lru(256)
+        elapsed = _time_loop(fn, keys)
+        sync_results[c.name] = n_ops / elapsed
+    results["sync_256"] = sync_results
+
+    return results
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Benchmark 7 — Shared backend: single-process throughput
 # ═══════════════════════════════════════════════════════════════════════════
 
 
@@ -562,7 +621,7 @@ def main() -> None:
     available = [c for c in contestants if c.available]
     unavailable = [c for c in contestants if not c.available]
 
-    total_steps = 5 if args.quick else 7
+    total_steps = 6 if args.quick else 8
 
     tag_suffix = " (free-threaded)" if info["gil_disabled"] else ""
     print(f"Python {info['version']}{tag_suffix}  [{info['implementation']}]")
@@ -627,15 +686,26 @@ def main() -> None:
                 parts.append(f"{name}={fmt(d['ops_per_sec'])}")
             print(f"  TTL={ttl_label}: {' '.join(parts)}")
 
-    # 6. Shared backend single-process
+    # 6. Async throughput
     step = 4 if args.quick else 6
+    async_cache_sizes = [256]
+    print(f"\n[{step}/{total_steps}] Async throughput ...")
+    async_results = bench_async_throughput(contestants, async_cache_sizes)
+    for sz_label, sz_data in async_results.items():
+        parts = []
+        for name, ops in sz_data.items():
+            parts.append(f"{name}={fmt(ops)}")
+        print(f"  {sz_label}: {' '.join(parts)}")
+
+    # 7. Shared backend single-process
+    step = 5 if args.quick else 7
     print(f"\n[{step}/{total_steps}] Shared backend: memory vs shared ...")
     shared_tp_results = bench_shared_throughput()
     for backend, data in shared_tp_results.items():
         print(f"  {backend}: {data['ops_per_sec']:,.0f} ops/s  hit_rate={data['hit_rate']:.1%}")
 
-    # 7. Multi-process scaling
-    step = 5 if args.quick else 7
+    # 8. Multi-process scaling
+    step = 6 if args.quick else 8
     process_counts = [1, 2, 4, 8]
     print(f"\n[{step}/{total_steps}] Shared backend: multi-process scaling ...")
     mp_results = bench_multiprocess(process_counts)
@@ -655,6 +725,7 @@ def main() -> None:
         "contestants": contestant_info,
         "throughput": tp_results,
         "threading": th_results,
+        "async_throughput": async_results,
         "shared_throughput": shared_tp_results,
         "multiprocess": mp_results,
     }

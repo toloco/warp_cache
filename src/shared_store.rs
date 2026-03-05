@@ -42,7 +42,10 @@ pub struct SharedCachedFunction {
     fn_obj: Py<PyAny>,
     pickle_dumps: Py<PyAny>,
     pickle_loads: Py<PyAny>,
-    cache: parking_lot::Mutex<ShmCache>,
+    cache: ShmCache,
+    max_key_size: usize,
+    max_value_size: usize,
+    hash_state: RandomState,
 }
 
 #[pymethods]
@@ -80,11 +83,21 @@ impl SharedCachedFunction {
             pyo3::exceptions::PyOSError::new_err(format!("Failed to create shared cache: {e}"))
         })?;
 
+        let hash_state = RandomState::with_seeds(
+            0x517cc1b727220a95,
+            0x6c62272e07bb0142,
+            0x0f1e2d3c4b5a6978,
+            0xa1b2c3d4e5f60718,
+        );
+
         Ok(SharedCachedFunction {
             fn_obj,
             pickle_dumps,
             pickle_loads,
-            cache: parking_lot::Mutex::new(cache),
+            cache,
+            max_key_size,
+            max_value_size,
+            hash_state,
         })
     }
 
@@ -97,32 +110,22 @@ impl SharedCachedFunction {
     ) -> PyResult<Py<PyAny>> {
         let (key_hash, key_bytes) = self.make_key(py, &args, &kwargs)?;
 
-        // Check size limits
-        {
-            let cache = self.cache.lock();
-            if cache.is_oversize(&key_bytes, &[]) {
-                cache.record_oversize_skip();
-                drop(cache);
-                return self
-                    .fn_obj
-                    .bind(py)
-                    .call(args, kwargs.as_ref())
-                    .map(|r| r.unbind());
-            }
+        // Check key size limit (no lock needed — uses cached struct field)
+        if key_bytes.len() > self.max_key_size {
+            self.cache.record_oversize_skip();
+            return self
+                .fn_obj
+                .bind(py)
+                .call(args, kwargs.as_ref())
+                .map(|r| r.unbind());
         }
 
-        // Lookup in shared cache
-        let value_bytes: Option<Vec<u8>> = {
-            let cache = self.cache.lock();
-            match cache.get(key_hash, &key_bytes) {
-                ShmGetResult::Hit(v) => Some(v),
-                ShmGetResult::Miss => None,
+        // Lookup in shared cache (lock-free via seqlock)
+        match self.cache.get(key_hash, &key_bytes) {
+            ShmGetResult::Hit(vb) => {
+                return self.deserialize_value(py, &vb);
             }
-        };
-
-        // On hit: deserialize and return
-        if let Some(vb) = value_bytes {
-            return self.deserialize_value(py, &vb);
+            ShmGetResult::Miss => {}
         }
 
         // Cache miss: call the wrapped function
@@ -143,8 +146,7 @@ impl SharedCachedFunction {
     ) -> PyResult<Option<Py<PyAny>>> {
         let (key_hash, key_bytes) = self.make_key(py, &args, &kwargs)?;
 
-        let cache = self.cache.lock();
-        match cache.get(key_hash, &key_bytes) {
+        match self.cache.get(key_hash, &key_bytes) {
             ShmGetResult::Hit(vb) => {
                 let value = self.deserialize_value(py, &vb)?;
                 Ok(Some(value))
@@ -169,8 +171,7 @@ impl SharedCachedFunction {
     }
 
     fn cache_info(&self) -> SharedCacheInfo {
-        let cache = self.cache.lock();
-        let info = cache.info();
+        let info = self.cache.info();
         SharedCacheInfo {
             hits: info.hits,
             misses: info.misses,
@@ -181,8 +182,7 @@ impl SharedCachedFunction {
     }
 
     fn cache_clear(&self) {
-        let mut cache = self.cache.lock();
-        cache.clear();
+        self.cache.clear();
     }
 }
 
@@ -220,13 +220,7 @@ impl SharedCachedFunction {
         // Hash the serialized bytes — deterministic across processes
         // (Python's hash() is randomized per-process for str/bytes)
         let key_hash = {
-            let state = RandomState::with_seeds(
-                0x517cc1b727220a95,
-                0x6c62272e07bb0142,
-                0x0f1e2d3c4b5a6978,
-                0xa1b2c3d4e5f60718,
-            );
-            let mut hasher = state.build_hasher();
+            let mut hasher = self.hash_state.build_hasher();
             hasher.write(&key_bytes);
             hasher.finish()
         };
@@ -251,18 +245,14 @@ impl SharedCachedFunction {
             serde::wrap_pickle(pickle_bytes)
         };
 
-        {
-            let cache = self.cache.lock();
-            if cache.is_oversize(key_bytes, &value_bytes) {
-                cache.record_oversize_skip();
-                return Ok(());
-            }
+        // Check size limits (no lock — uses cached struct fields)
+        if key_bytes.len() > self.max_key_size || value_bytes.len() > self.max_value_size {
+            self.cache.record_oversize_skip();
+            return Ok(());
         }
 
-        {
-            let mut cache = self.cache.lock();
-            cache.insert(key_hash, key_bytes, &value_bytes);
-        }
+        // Insert acquires seqlock write lock internally
+        self.cache.insert(key_hash, key_bytes, &value_bytes);
         Ok(())
     }
 

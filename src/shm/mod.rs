@@ -42,7 +42,7 @@ enum OptimisticResult {
 /// at the same mmap.
 pub struct ShmCache {
     region: ShmRegion,
-    next_unique_id: u64,
+    next_unique_id: AtomicU64,
 }
 
 impl ShmCache {
@@ -71,7 +71,7 @@ impl ShmCache {
 
         Ok(ShmCache {
             region,
-            next_unique_id: 0,
+            next_unique_id: AtomicU64::new(0),
         })
     }
 
@@ -132,12 +132,6 @@ impl ShmCache {
     fn atomic_oversize_skips(&self) -> &AtomicU64 {
         // Header offset of `oversize_skips` = 32
         unsafe { &*(self.base_ptr().add(32) as *const AtomicU64) }
-    }
-
-    /// Check if key/value sizes exceed limits. Returns true if oversize.
-    pub fn is_oversize(&self, key_bytes: &[u8], value_bytes: &[u8]) -> bool {
-        let h = self.header();
-        key_bytes.len() > h.max_key_size as usize || value_bytes.len() > h.max_value_size as usize
     }
 
     /// Bounds-checked hash table lookup for the optimistic read path.
@@ -314,14 +308,14 @@ impl ShmCache {
     }
 
     /// Insert a key-value pair. Evicts if necessary.
-    pub fn insert(&mut self, key_hash: u64, key_bytes: &[u8], value_bytes: &[u8]) {
+    pub fn insert(&self, key_hash: u64, key_bytes: &[u8], value_bytes: &[u8]) {
         let lock = self.lock();
         lock.write_lock();
         unsafe { self.insert_inner(key_hash, key_bytes, value_bytes) };
         lock.write_unlock();
     }
 
-    unsafe fn insert_inner(&mut self, key_hash: u64, key_bytes: &[u8], value_bytes: &[u8]) {
+    unsafe fn insert_inner(&self, key_hash: u64, key_bytes: &[u8], value_bytes: &[u8]) {
         let h = self.header();
         let ht_cap = h.ht_capacity;
         let slot_size = h.slot_size;
@@ -407,8 +401,7 @@ impl ShmCache {
         slot.visited = 0;
         slot.prev = SLOT_NONE;
         slot.next = SLOT_NONE;
-        slot.unique_id = self.next_unique_id;
-        self.next_unique_id += 1;
+        slot.unique_id = self.next_unique_id.fetch_add(1, AtomicOrdering::Relaxed);
 
         // Copy key bytes
         let key_dest = slot_ptr.add(SLOT_HEADER_SIZE);
@@ -464,14 +457,14 @@ impl ShmCache {
     }
 
     /// Clear the entire cache.
-    pub fn clear(&mut self) {
+    pub fn clear(&self) {
         let lock = self.lock();
         lock.write_lock();
         unsafe { self.clear_inner() };
         lock.write_unlock();
     }
 
-    unsafe fn clear_inner(&mut self) {
+    unsafe fn clear_inner(&self) {
         let h = self.header();
         let ht_cap = h.ht_capacity;
         let slot_size = h.slot_size;

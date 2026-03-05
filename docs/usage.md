@@ -93,7 +93,7 @@ from warp_cache import cache, Backend
 
 The memory backend keeps all cached data in the process's own heap. Keys are stored as live Python objects (no serialization), and lookups go through a single Rust `__call__` — hash, lookup, equality check, and return all happen in one FFI crossing with no copying.
 
-Thread safety is provided by a `parking_lot::RwLock` (~8ns uncontended). This is the fastest backend, reaching **14-20M ops/s** single-threaded.
+Thread safety is provided by a sharded `hashbrown::HashMap` with `parking_lot::RwLock` per shard — cache hits acquire only a cheap per-shard read lock (~8ns). The write lock is acquired only on cache misses for SIEVE eviction.
 
 ```python
 @cache(max_size=256)  # backend="memory" is the default
@@ -125,7 +125,7 @@ def get_embedding(text: str) -> list[float]:
 
 **Serialization overhead:**
 
-Both keys and values are serialized with `pickle.dumps` on write and `pickle.loads` on read. This adds significant per-operation cost compared to the memory backend, which stores live Python objects directly. Expect roughly **2x** lower throughput depending on the size and complexity of your keys and values — the seqlock made reads near-free; the gap is now dominated by pickle serialization. The shared backend is designed for cases where the cached computation is expensive enough (network I/O, ML inference, heavy math) that the serialization cost is negligible in comparison.
+Keys and values are serialized using a fast-path binary format for common primitives (None, bool, int, float, str, bytes, flat tuples) with pickle fallback for complex types. This adds per-operation cost compared to the memory backend, which stores live Python objects directly. Expect roughly **2x** lower throughput — the gap is irreducible cross-process overhead: serialization, deterministic hashing, seqlock, and mmap copy. No Mutex is used; all reads are fully lock-free. The shared backend is designed for cases where the cached computation is expensive enough (network I/O, ML inference, heavy math) that the serialization cost is negligible in comparison.
 
 **Size limits:**
 

@@ -48,12 +48,11 @@ pub struct SharedCachedFunction {
 #[pymethods]
 impl SharedCachedFunction {
     #[new]
-    #[pyo3(signature = (fn_obj, strategy, max_size, ttl=None, max_key_size=512, max_value_size=4096, shm_name=None))]
+    #[pyo3(signature = (fn_obj, max_size, ttl=None, max_key_size=512, max_value_size=4096, shm_name=None))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         py: Python<'_>,
         fn_obj: Py<PyAny>,
-        strategy: u8,
         max_size: usize,
         ttl: Option<f64>,
         max_key_size: usize,
@@ -72,7 +71,6 @@ impl SharedCachedFunction {
 
         let cache = ShmCache::create_or_open(
             &name,
-            strategy as u32,
             max_size as u32,
             max_key_size as u32,
             max_value_size as u32,

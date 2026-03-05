@@ -5,27 +5,25 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
-from warp_cache import Strategy, cache
+from warp_cache import cache
 
 # ---------------------------------------------------------------------------
-# 1. High-volume insert/get — 100k ops per strategy, verify correctness
+# 1. High-volume insert/get — 100k ops, verify correctness
 # ---------------------------------------------------------------------------
 
 
 def test_high_volume():
-    for strategy in Strategy:
+    @cache(max_size=1024)
+    def fn(x):
+        return x * 3 + 1
 
-        @cache(strategy=strategy, max_size=1024)
-        def fn(x):
-            return x * 3 + 1
+    for i in range(100_000):
+        key = i % 2000  # 2000 unique keys, many repeats
+        assert fn(key) == key * 3 + 1
 
-        for i in range(100_000):
-            key = i % 2000  # 2000 unique keys, many repeats
-            assert fn(key) == key * 3 + 1
-
-        info = fn.cache_info()
-        assert info.hits + info.misses == 100_000
-        assert info.current_size <= 1024
+    info = fn.cache_info()
+    assert info.hits + info.misses == 100_000
+    assert info.current_size <= 1024
 
 
 # ---------------------------------------------------------------------------
@@ -34,16 +32,14 @@ def test_high_volume():
 
 
 def test_eviction_churn():
-    for strategy in Strategy:
+    @cache(max_size=10)
+    def fn(x):
+        return x
 
-        @cache(strategy=strategy, max_size=10)
-        def fn(x):
-            return x
-
-        for i in range(10_000):
-            assert fn(i) == i
-            info = fn.cache_info()
-            assert info.current_size <= 10
+    for i in range(10_000):
+        assert fn(i) == i
+        info = fn.cache_info()
+        assert info.current_size <= 10
 
 
 # ---------------------------------------------------------------------------
@@ -55,7 +51,7 @@ def test_heavy_contention():
     call_count = 0
     lock = threading.Lock()
 
-    @cache(strategy=Strategy.LRU, max_size=64)
+    @cache(max_size=64)
     def fn(x):
         nonlocal call_count
         with lock:
@@ -90,7 +86,7 @@ def test_heavy_contention():
 def test_ttl_under_load():
     call_count = 0
 
-    @cache(strategy=Strategy.LRU, max_size=256, ttl=0.05)
+    @cache(max_size=256, ttl=0.05)
     def fn(x):
         nonlocal call_count
         call_count += 1
@@ -121,7 +117,7 @@ def test_ttl_under_load():
 
 
 def test_mixed_workload():
-    @cache(strategy=Strategy.LFU, max_size=128)
+    @cache(max_size=128)
     def fn(x):
         return x + 1
 

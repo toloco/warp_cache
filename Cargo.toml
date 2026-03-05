@@ -10,7 +10,7 @@ crate-type = ["cdylib"]
 [dependencies]
 pyo3 = { version = "0.28.1", features = ["extension-module"] }
 parking_lot = "0.12"
-hashlink = "0.9"
+papaya = "0.2"
 
 [target.'cfg(not(target_os = "windows"))'.dependencies]
 memmap2 = "0.9"

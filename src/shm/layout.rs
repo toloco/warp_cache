@@ -6,9 +6,9 @@
 /// Magic bytes at the start of the header to validate the mapping.
 pub const MAGIC: [u8; 8] = *b"FCACHE01";
 
-/// Layout version — bumped when the lock format changes.
-/// v1 = pthread_rwlock, v2 = seqlock.
-pub const VERSION: u32 = 2;
+/// Layout version — bumped when the format changes.
+/// v1 = pthread_rwlock, v2 = seqlock, v3 = SIEVE eviction.
+pub const VERSION: u32 = 3;
 
 /// Size of the fixed header at the start of the region.
 pub const HEADER_SIZE: usize = 256;
@@ -45,7 +45,7 @@ pub struct Header {
     pub list_head: i32,      // 72..76  (eviction list, SLOT_NONE = empty)
     pub list_tail: i32,      // 76..80
     pub free_head: i32,      // 80..84
-    pub _reserved: i32,      // 84..88  (alignment padding)
+    pub sieve_hand: i32,     // 84..88  (SIEVE eviction hand position)
 
     // Explicit padding to 256 bytes: 256 - 88 = 168
     pub _pad: [u8; 168],
@@ -79,8 +79,8 @@ pub struct SlotHeader {
     // 8-byte aligned group
     pub key_hash: u64,         // 0..8
     pub created_at_nanos: u64, // 8..16  (monotonic nanos)
-    pub frequency: u64,        // 16..24
-    pub unique_id: u64,        // 24..32 (monotonic ID for LFU)
+    pub visited: u64,          // 16..24 (SIEVE: 0=unvisited, 1=visited)
+    pub unique_id: u64,        // 24..32 (unused, kept for layout stability)
 
     // 4-byte aligned group
     pub occupied: u32,  // 32..36 (1 = occupied, 0 = free)

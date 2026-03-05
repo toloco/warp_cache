@@ -30,7 +30,6 @@ def _cleanup_shm():
 # Use a fixed shm_name so all processes (even with spawn) share the same cache
 _shared_fn = SharedCachedFunction(
     lambda x: x * x,
-    0,
     16,
     ttl=None,
     max_key_size=512,
@@ -121,7 +120,6 @@ class TestMultiprocess:
         # Parent writes a string-keyed entry
         parent_fn = SharedCachedFunction(
             lambda x: f"hello-{x}",
-            0,
             16,
             ttl=None,
             max_key_size=512,
@@ -139,7 +137,7 @@ class TestMultiprocess:
 
             fn = SharedCachedFunction(
                 lambda x: f"hello-{{x}}",
-                0, 16, ttl=None,
+                16, ttl=None,
                 max_key_size=512, max_value_size=4096,
                 shm_name="{shm_name}",
             )

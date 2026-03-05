@@ -10,7 +10,7 @@ import tempfile
 
 import pytest
 
-from warp_cache import Strategy, cache
+from warp_cache import cache
 from warp_cache._warp_cache_rs import SharedCachedFunction
 
 
@@ -43,7 +43,7 @@ class TestSingleProcessRealistic:
         _cleanup_shm()
 
     def test_hit_miss_ratio(self):
-        @cache(strategy=Strategy.LRU, max_size=MAX_SIZE, backend="shared")
+        @cache(max_size=MAX_SIZE, backend="shared")
         def fn(n):
             return _expensive_compute(n)
 
@@ -84,7 +84,6 @@ class TestSingleProcessRealistic:
 
 _shared_realistic_fn = SharedCachedFunction(
     _expensive_compute,
-    0,
     MAX_SIZE,
     ttl=None,
     max_key_size=512,

@@ -1,10 +1,10 @@
-from warp_cache import Strategy, cache
+from warp_cache import cache
 
 
 def test_basic_hit_miss():
     call_count = 0
 
-    @cache(strategy=Strategy.LRU, max_size=128)
+    @cache(max_size=128)
     def add(a, b):
         nonlocal call_count
         call_count += 1
@@ -81,7 +81,7 @@ def test_kwargs():
 
 
 def test_eviction_at_capacity():
-    @cache(strategy=Strategy.LRU, max_size=3)
+    @cache(max_size=3)
     def identity(x):
         return x
 
@@ -91,11 +91,7 @@ def test_eviction_at_capacity():
     info = identity.cache_info()
     assert info.current_size == 3
 
-    # Adding a 4th should evict the oldest (1)
+    # Adding a 4th should evict one entry (SIEVE picks an unvisited one)
     identity(4)
     info = identity.cache_info()
     assert info.current_size == 3
-
-    # 1 should be a miss now
-    identity(1)
-    assert identity.cache_info().misses == 5  # 1,2,3,4 were misses, then 1 again

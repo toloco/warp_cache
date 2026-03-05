@@ -1,7 +1,7 @@
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
-from warp_cache import Strategy, cache
+from warp_cache import cache
 
 
 def test_concurrent_access():
@@ -9,7 +9,7 @@ def test_concurrent_access():
     call_count = 0
     lock = threading.Lock()
 
-    @cache(strategy=Strategy.LRU, max_size=128)
+    @cache(max_size=128)
     def slow_add(a, b):
         nonlocal call_count
         with lock:
@@ -34,37 +34,10 @@ def test_concurrent_access():
     assert call_count < 800
 
 
-def test_concurrent_different_strategies():
-    """Verify thread safety across all strategies."""
-    for strategy in Strategy:
-        call_count = 0
-        lock = threading.Lock()
-
-        @cache(strategy=strategy, max_size=64)
-        def fn(x):
-            nonlocal call_count
-            with lock:
-                call_count += 1
-            return x * x
-
-        def worker():
-            for i in range(100):
-                assert fn(i % 20) == (i % 20) ** 2
-
-        threads = [threading.Thread(target=worker) for _ in range(8)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
-
-        info = fn.cache_info()
-        assert info.hits > 0, f"Expected hits for {strategy.name}"
-
-
 def test_concurrent_cache_clear():
     """Test that cache_clear during concurrent access doesn't crash."""
 
-    @cache(strategy=Strategy.LRU, max_size=128)
+    @cache(max_size=128)
     def fn(x):
         return x
 

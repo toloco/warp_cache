@@ -1,55 +1,31 @@
-from warp_cache import Strategy, cache
+from warp_cache import cache
 
 
-def test_lru_eviction_order():
-    """LRU: least recently used evicted first."""
+def test_sieve_unvisited_evicted_first():
+    """SIEVE: unvisited entries are evicted before visited ones."""
     call_count = 0
 
-    @cache(strategy=Strategy.LRU, max_size=3)
+    @cache(max_size=3)
     def fn(x):
         nonlocal call_count
         call_count += 1
         return x
 
-    fn(1)  # miss. Cache order (LRU→MRU): [1]
-    fn(2)  # miss. [1, 2]
-    fn(3)  # miss. [1, 2, 3]
-    fn(1)  # hit, promotes 1. [2, 3, 1]
+    fn(1)  # miss, inserted (unvisited)
+    fn(2)  # miss, inserted (unvisited)
+    fn(3)  # miss, inserted (unvisited)
     assert call_count == 3
 
-    fn(4)  # miss, evicts 2 (LRU). [3, 1, 4]
-    assert call_count == 4
-
-    # Verify: 2 was evicted (miss), 1 and 3 are still present (hit)
-    call_count = 0
-    fn(1)  # hit
-    assert call_count == 0
-    fn(3)  # hit
-    assert call_count == 0
-    fn(2)  # miss — was evicted
-    assert call_count == 1
-
-
-def test_fifo_eviction_order():
-    """FIFO: first inserted evicted first, access doesn't change order."""
-    call_count = 0
-
-    @cache(strategy=Strategy.FIFO, max_size=3)
-    def fn(x):
-        nonlocal call_count
-        call_count += 1
-        return x
-
-    fn(1)  # miss. Insertion order: [1]
-    fn(2)  # miss. [1, 2]
-    fn(3)  # miss. [1, 2, 3]
-    fn(1)  # hit (FIFO doesn't reorder). Still [1, 2, 3]
+    # Access 2 and 3 — marks them as visited
+    fn(2)  # hit → visited=true
+    fn(3)  # hit → visited=true
     assert call_count == 3
 
-    fn(4)  # miss, evicts 1 (oldest). [2, 3, 4]
+    # Insert 4 — must evict. 1 is unvisited, should be evicted
+    fn(4)  # miss, evicts 1
     assert call_count == 4
 
-    # Verify: 1 was evicted (miss), 2 and 3 are still present (hit)
+    # Verify: 1 was evicted (miss), 2 and 3 survive (hit)
     call_count = 0
     fn(2)  # hit
     assert call_count == 0
@@ -59,62 +35,70 @@ def test_fifo_eviction_order():
     assert call_count == 1
 
 
-def test_mru_eviction_order():
-    """MRU: most recently used evicted first."""
+def test_sieve_second_chance():
+    """SIEVE: visited entries get their visited bit cleared (second chance)
+    and are only evicted on a subsequent pass if still unvisited."""
     call_count = 0
 
-    @cache(strategy=Strategy.MRU, max_size=3)
+    @cache(max_size=2)
     def fn(x):
         nonlocal call_count
         call_count += 1
         return x
 
-    fn(1)  # miss. [1]
-    fn(2)  # miss. [1, 2]
-    fn(3)  # miss. [1, 2, 3]
-    fn(2)  # hit, 2 becomes most recent. [1, 3, 2]
+    fn(1)  # miss
+    fn(2)  # miss
+    assert call_count == 2
+
+    # Visit both entries
+    fn(1)  # hit → visited=true
+    fn(2)  # hit → visited=true
+
+    # Insert 3 — all entries visited, so the hand scans and clears visited bits,
+    # then evicts the first entry it finds unvisited on the second pass
+    fn(3)  # miss, evicts one of {1, 2}
     assert call_count == 3
 
-    fn(4)  # miss, evicts 2 (MRU). [1, 3, 4]
-    assert call_count == 4
+    info = fn.cache_info()
+    assert info.current_size == 2
 
-    # Verify: 2 was evicted (miss), 1 and 3 are still present (hit)
+
+def test_sieve_eviction_respects_capacity():
+    """Cache never exceeds max_size."""
+
+    @cache(max_size=5)
+    def fn(x):
+        return x
+
+    for i in range(100):
+        fn(i)
+        info = fn.cache_info()
+        assert info.current_size <= 5
+
+
+def test_sieve_hit_sets_visited():
+    """A cache hit marks the entry as visited, protecting it from eviction."""
     call_count = 0
-    fn(1)  # hit
-    assert call_count == 0
-    fn(3)  # hit
-    assert call_count == 0
-    fn(2)  # miss — was evicted
-    assert call_count == 1
 
-
-def test_lfu_eviction_order():
-    """LFU: least frequently used evicted first."""
-    call_count = 0
-
-    @cache(strategy=Strategy.LFU, max_size=3)
+    @cache(max_size=3)
     def fn(x):
         nonlocal call_count
         call_count += 1
         return x
 
-    fn(1)  # miss, freq(1)=0
-    fn(2)  # miss, freq(2)=0
-    fn(3)  # miss, freq(3)=0
-    fn(1)  # hit, freq(1)=1
-    fn(1)  # hit, freq(1)=2
-    fn(2)  # hit, freq(2)=1
-    # freqs: 1→2, 2→1, 3→0
-    assert call_count == 3
+    fn(1)  # miss
+    fn(2)  # miss
+    fn(3)  # miss
+    # All entries are unvisited
 
-    fn(4)  # miss, evicts 3 (lowest freq=0)
+    # Visit entry 1
+    fn(1)  # hit → visited=true
+
+    # Insert 4 — evicts an unvisited entry (2 or 3), not 1
+    fn(4)  # miss
     assert call_count == 4
 
-    # Verify: 3 was evicted (miss), 1 and 2 are still present (hit)
+    # Entry 1 should still be cached
     call_count = 0
     fn(1)  # hit
     assert call_count == 0
-    fn(2)  # hit
-    assert call_count == 0
-    fn(3)  # miss — was evicted
-    assert call_count == 1

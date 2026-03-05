@@ -1,39 +1,17 @@
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-use parking_lot::{Mutex, RwLock};
+use parking_lot::Mutex;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyTuple};
 
-use crate::entry::CacheEntry;
+use crate::entry::SieveEntry;
 use crate::key::CacheKey;
-use crate::strategies::fifo::FifoStrategy;
-use crate::strategies::lfu::LfuStrategy;
-use crate::strategies::lru::LruStrategy;
-use crate::strategies::mru::MruStrategy;
-use crate::strategies::StrategyEnum;
 
-/// Maximum number of deferred ordering updates buffered before a write lock
-/// is acquired.  Cache hits under the read lock append to this log; when a
-/// write lock is taken (on miss or when the log is full), the log is drained
-/// and ordering is replayed.  If the log fills up between write-lock
-/// acquisitions, additional hit-ordering updates are silently dropped — this
-/// makes eviction ordering *approximate* under sustained hit-only workloads.
-const ACCESS_LOG_CAPACITY: usize = 64;
-
-struct CacheStoreInner {
-    strategy: StrategyEnum,
-    ttl: Option<Duration>,
-}
-
-impl CacheStoreInner {
-    /// Drain the access log and replay deferred ordering updates.
-    #[inline(always)]
-    fn drain_access_log(&mut self, log: &mut Vec<CacheKey>) {
-        for key in log.drain(..) {
-            self.strategy.record_access(&key);
-        }
-    }
+struct SieveState {
+    order: VecDeque<CacheKey>,
+    hand: usize,
 }
 
 #[pyclass(frozen)]
@@ -61,244 +39,68 @@ impl CacheInfo {
 #[pyclass(frozen)]
 pub struct CachedFunction {
     fn_obj: Py<PyAny>,
-    inner: RwLock<CacheStoreInner>,
-    access_log: Mutex<Vec<CacheKey>>,
+    map: papaya::HashMap<CacheKey, SieveEntry>,
+    sieve: Mutex<SieveState>,
+    ttl: Option<Duration>,
+    capacity: usize,
     hits: AtomicU64,
     misses: AtomicU64,
 }
 
-#[pymethods]
 impl CachedFunction {
-    #[new]
-    #[pyo3(signature = (fn_obj, strategy, max_size, ttl=None))]
-    fn new(fn_obj: Py<PyAny>, strategy: u8, max_size: usize, ttl: Option<f64>) -> Self {
-        let strat = match strategy {
-            0 => StrategyEnum::Lru(LruStrategy::new(max_size)),
-            1 => StrategyEnum::Mru(MruStrategy::new(max_size)),
-            2 => StrategyEnum::Fifo(FifoStrategy::new(max_size)),
-            3 => StrategyEnum::Lfu(LfuStrategy::new(max_size)),
-            _ => StrategyEnum::Lru(LruStrategy::new(max_size)),
-        };
-        let ttl_dur = ttl.map(Duration::from_secs_f64);
-        CachedFunction {
-            fn_obj,
-            inner: RwLock::new(CacheStoreInner {
-                strategy: strat,
-                ttl: ttl_dur,
-            }),
-            access_log: Mutex::new(Vec::with_capacity(ACCESS_LOG_CAPACITY)),
-            hits: AtomicU64::new(0),
-            misses: AtomicU64::new(0),
-        }
-    }
-
-    #[pyo3(signature = (*args, **kwargs))]
-    fn __call__<'py>(
-        &self,
-        py: Python<'py>,
-        args: Bound<'py, PyTuple>,
-        kwargs: Option<Bound<'py, PyDict>>,
-    ) -> PyResult<Py<PyAny>> {
-        // Build the cache key (inlined for performance on the hot path)
-        let key_obj: Py<PyAny> = match kwargs {
-            Some(ref kw) if !kw.is_empty() => {
-                let builtins = py.import("builtins")?;
-                let items = kw.call_method0("items")?;
-                let sorted_items = builtins.call_method1("sorted", (items,))?;
-                let kw_tup = builtins.getattr("tuple")?.call1((sorted_items,))?;
-                let combined = PyTuple::new(py, [args.as_any().clone(), kw_tup])?;
-                combined.unbind().into()
-            }
-            _ => args.clone().unbind().into(),
-        };
-        let cache_key = CacheKey::new(py, key_obj)?;
-
-        // FAST PATH: read lock — cache hit
-        {
-            let inner = self.inner.read();
-            if let Some(entry) = inner.strategy.peek(&cache_key) {
-                if let Some(ttl) = inner.ttl {
-                    if entry.created_at.elapsed() > ttl {
-                        // Expired — fall through to slow path (can't remove under read lock)
-                        drop(inner);
-                    } else {
-                        let val = entry.value.clone_ref(py);
-                        drop(inner);
-                        self.hits.fetch_add(1, Ordering::Relaxed);
-                        let mut log = self.access_log.lock();
-                        if log.len() < ACCESS_LOG_CAPACITY {
-                            log.push(cache_key);
-                        }
-                        return Ok(val);
-                    }
-                } else {
-                    let val = entry.value.clone_ref(py);
-                    drop(inner);
-                    self.hits.fetch_add(1, Ordering::Relaxed);
-                    let mut log = self.access_log.lock();
-                    if log.len() < ACCESS_LOG_CAPACITY {
-                        log.push(cache_key);
-                    }
-                    return Ok(val);
-                }
-            }
+    /// Evict one entry using the SIEVE algorithm.
+    /// Must be called with `self.sieve` locked. The `sieve` parameter is the
+    /// locked guard, and `pinned` is a papaya pin obtained by the caller.
+    fn evict_one(
+        sieve: &mut SieveState,
+        map: &papaya::HashMap<CacheKey, SieveEntry>,
+    ) {
+        let initial_len = sieve.order.len();
+        if initial_len == 0 {
+            return;
         }
 
-        // Cache miss: call the wrapped function (outside any lock)
-        let result = self.fn_obj.bind(py).call(args, kwargs.as_ref())?.unbind();
+        let pinned = map.pin();
+        let mut scanned = 0;
+        while scanned <= initial_len {
+            if sieve.order.is_empty() {
+                break;
+            }
+            if sieve.hand >= sieve.order.len() {
+                sieve.hand = 0;
+            }
 
-        // SLOW PATH: write lock — drain access log + insert
-        {
-            let mut inner = self.inner.write();
+            let key = sieve.order[sieve.hand].clone();
 
-            // Drain deferred access log
-            let mut log = self.access_log.lock();
-            inner.drain_access_log(&mut log);
-            drop(log);
-
-            // Double-check: another thread may have inserted while we were computing
-            let needs_insert = match inner.strategy.peek(&cache_key) {
+            match pinned.get(&key) {
                 Some(entry) => {
-                    if let Some(ttl) = inner.ttl {
-                        entry.created_at.elapsed() > ttl
+                    if entry.visited.load(Ordering::Relaxed) {
+                        // Second chance: clear visited bit, advance hand
+                        entry.visited.store(false, Ordering::Relaxed);
+                        sieve.hand += 1;
+                        scanned += 1;
                     } else {
-                        false
-                    }
-                }
-                None => true,
-            };
-
-            if needs_insert {
-                // Remove expired entry if present
-                inner.strategy.remove(&cache_key);
-                let entry = CacheEntry {
-                    value: result.clone_ref(py),
-                    created_at: Instant::now(),
-                    frequency: 0,
-                };
-                inner.strategy.insert(cache_key, entry);
-            }
-        }
-
-        self.misses.fetch_add(1, Ordering::Relaxed);
-        Ok(result)
-    }
-
-    /// Cache lookup only. Returns the cached value or None on miss.
-    #[pyo3(signature = (*args, **kwargs))]
-    fn get<'py>(
-        &self,
-        py: Python<'py>,
-        args: Bound<'py, PyTuple>,
-        kwargs: Option<Bound<'py, PyDict>>,
-    ) -> PyResult<Option<Py<PyAny>>> {
-        let cache_key = Self::make_key(py, &args, &kwargs)?;
-
-        // FAST PATH: read lock
-        {
-            let inner = self.inner.read();
-            if let Some(entry) = inner.strategy.peek(&cache_key) {
-                if let Some(ttl) = inner.ttl {
-                    if entry.created_at.elapsed() > ttl {
-                        // Expired — need write lock to remove
-                        drop(inner);
-                    } else {
-                        let val = entry.value.clone_ref(py);
-                        drop(inner);
-                        self.hits.fetch_add(1, Ordering::Relaxed);
-                        let mut log = self.access_log.lock();
-                        if log.len() < ACCESS_LOG_CAPACITY {
-                            log.push(cache_key);
+                        // Evict this entry
+                        pinned.remove(&key);
+                        sieve.order.remove(sieve.hand);
+                        if sieve.hand >= sieve.order.len() && !sieve.order.is_empty() {
+                            sieve.hand = 0;
                         }
-                        return Ok(Some(val));
+                        return;
                     }
-                } else {
-                    let val = entry.value.clone_ref(py);
-                    drop(inner);
-                    self.hits.fetch_add(1, Ordering::Relaxed);
-                    let mut log = self.access_log.lock();
-                    if log.len() < ACCESS_LOG_CAPACITY {
-                        log.push(cache_key);
+                }
+                None => {
+                    // Stale entry (TTL-removed or otherwise gone from map)
+                    sieve.order.remove(sieve.hand);
+                    if sieve.hand >= sieve.order.len() && !sieve.order.is_empty() {
+                        sieve.hand = 0;
                     }
-                    return Ok(Some(val));
+                    // Don't increment scanned — order shifted, retry at same position
                 }
             }
         }
-
-        // SLOW PATH: write lock for expired removal
-        {
-            let mut inner = self.inner.write();
-            let mut log = self.access_log.lock();
-            inner.drain_access_log(&mut log);
-            drop(log);
-
-            // Check again under write lock
-            if let Some(entry) = inner.strategy.peek(&cache_key) {
-                if let Some(ttl) = inner.ttl {
-                    if entry.created_at.elapsed() > ttl {
-                        inner.strategy.remove(&cache_key);
-                        self.misses.fetch_add(1, Ordering::Relaxed);
-                        return Ok(None);
-                    }
-                }
-                // Hit (possibly inserted by another thread)
-                let val = entry.value.clone_ref(py);
-                inner.strategy.record_access(&cache_key);
-                self.hits.fetch_add(1, Ordering::Relaxed);
-                return Ok(Some(val));
-            }
-        }
-
-        self.misses.fetch_add(1, Ordering::Relaxed);
-        Ok(None)
     }
 
-    /// Store a value in the cache for the given arguments.
-    #[pyo3(signature = (value, *args, **kwargs))]
-    fn set<'py>(
-        &self,
-        py: Python<'py>,
-        value: Py<PyAny>,
-        args: Bound<'py, PyTuple>,
-        kwargs: Option<Bound<'py, PyDict>>,
-    ) -> PyResult<()> {
-        let cache_key = Self::make_key(py, &args, &kwargs)?;
-        let mut inner = self.inner.write();
-
-        // Drain deferred access log
-        let mut log = self.access_log.lock();
-        inner.drain_access_log(&mut log);
-        drop(log);
-
-        let entry = CacheEntry {
-            value: value.clone_ref(py),
-            created_at: Instant::now(),
-            frequency: 0,
-        };
-        inner.strategy.insert(cache_key, entry);
-        Ok(())
-    }
-
-    fn cache_info(&self) -> CacheInfo {
-        let inner = self.inner.read();
-        CacheInfo {
-            hits: self.hits.load(Ordering::Relaxed),
-            misses: self.misses.load(Ordering::Relaxed),
-            max_size: inner.strategy.capacity(),
-            current_size: inner.strategy.len(),
-        }
-    }
-
-    fn cache_clear(&self) {
-        let mut inner = self.inner.write();
-        inner.strategy.clear();
-        self.access_log.lock().clear();
-        self.hits.store(0, Ordering::Relaxed);
-        self.misses.store(0, Ordering::Relaxed);
-    }
-}
-
-impl CachedFunction {
     #[inline(always)]
     fn make_key<'py>(
         py: Python<'py>,
@@ -317,5 +119,206 @@ impl CachedFunction {
             _ => args.clone().unbind().into(),
         };
         CacheKey::new(py, key_obj)
+    }
+}
+
+#[pymethods]
+impl CachedFunction {
+    #[new]
+    #[pyo3(signature = (fn_obj, max_size, ttl=None))]
+    fn new(fn_obj: Py<PyAny>, max_size: usize, ttl: Option<f64>) -> Self {
+        CachedFunction {
+            fn_obj,
+            map: papaya::HashMap::with_capacity(max_size),
+            sieve: Mutex::new(SieveState {
+                order: VecDeque::with_capacity(max_size),
+                hand: 0,
+            }),
+            ttl: ttl.map(Duration::from_secs_f64),
+            capacity: max_size,
+            hits: AtomicU64::new(0),
+            misses: AtomicU64::new(0),
+        }
+    }
+
+    #[pyo3(signature = (*args, **kwargs))]
+    fn __call__<'py>(
+        &self,
+        py: Python<'py>,
+        args: Bound<'py, PyTuple>,
+        kwargs: Option<Bound<'py, PyDict>>,
+    ) -> PyResult<Py<PyAny>> {
+        // Build the cache key
+        let key_obj: Py<PyAny> = match kwargs {
+            Some(ref kw) if !kw.is_empty() => {
+                let builtins = py.import("builtins")?;
+                let items = kw.call_method0("items")?;
+                let sorted_items = builtins.call_method1("sorted", (items,))?;
+                let kw_tup = builtins.getattr("tuple")?.call1((sorted_items,))?;
+                let combined = PyTuple::new(py, [args.as_any().clone(), kw_tup])?;
+                combined.unbind().into()
+            }
+            _ => args.clone().unbind().into(),
+        };
+        let cache_key = CacheKey::new(py, key_obj)?;
+
+        // FAST PATH: lock-free lookup via papaya
+        {
+            let pinned = self.map.pin();
+            if let Some(entry) = pinned.get(&cache_key) {
+                if let Some(ttl) = self.ttl {
+                    if entry.created_at.elapsed() > ttl {
+                        // Expired — remove lock-free and fall through to miss
+                        pinned.remove(&cache_key);
+                    } else {
+                        entry.visited.store(true, Ordering::Relaxed);
+                        let val = entry.value.clone_ref(py);
+                        self.hits.fetch_add(1, Ordering::Relaxed);
+                        return Ok(val);
+                    }
+                } else {
+                    entry.visited.store(true, Ordering::Relaxed);
+                    let val = entry.value.clone_ref(py);
+                    self.hits.fetch_add(1, Ordering::Relaxed);
+                    return Ok(val);
+                }
+            }
+        }
+
+        // Cache miss: call the wrapped function (no lock held)
+        let result = self.fn_obj.bind(py).call(args, kwargs.as_ref())?.unbind();
+
+        // SLOW PATH: lock sieve, double-check, evict if needed, insert
+        {
+            let pinned = self.map.pin();
+            let mut sieve = self.sieve.lock();
+
+            // Double-check: another thread may have inserted while we were computing
+            let needs_insert = match pinned.get(&cache_key) {
+                Some(entry) => {
+                    if let Some(ttl) = self.ttl {
+                        entry.created_at.elapsed() > ttl
+                    } else {
+                        false
+                    }
+                }
+                None => true,
+            };
+
+            if needs_insert {
+                // Remove expired entry from map if present (order cleaned lazily)
+                pinned.remove(&cache_key);
+
+                // Evict if at capacity
+                while pinned.len() >= self.capacity {
+                    Self::evict_one(&mut sieve, &self.map);
+                    if sieve.order.is_empty() {
+                        break;
+                    }
+                }
+
+                let entry = SieveEntry {
+                    value: result.clone_ref(py),
+                    created_at: Instant::now(),
+                    visited: std::sync::atomic::AtomicBool::new(false),
+                };
+                pinned.insert(cache_key.clone(), entry);
+                sieve.order.push_back(cache_key);
+            }
+        }
+
+        self.misses.fetch_add(1, Ordering::Relaxed);
+        Ok(result)
+    }
+
+    /// Cache lookup only. Returns the cached value or None on miss.
+    #[pyo3(signature = (*args, **kwargs))]
+    fn get<'py>(
+        &self,
+        py: Python<'py>,
+        args: Bound<'py, PyTuple>,
+        kwargs: Option<Bound<'py, PyDict>>,
+    ) -> PyResult<Option<Py<PyAny>>> {
+        let cache_key = Self::make_key(py, &args, &kwargs)?;
+
+        let pinned = self.map.pin();
+        if let Some(entry) = pinned.get(&cache_key) {
+            if let Some(ttl) = self.ttl {
+                if entry.created_at.elapsed() > ttl {
+                    // Expired — remove lock-free
+                    pinned.remove(&cache_key);
+                    self.misses.fetch_add(1, Ordering::Relaxed);
+                    return Ok(None);
+                }
+            }
+            entry.visited.store(true, Ordering::Relaxed);
+            let val = entry.value.clone_ref(py);
+            self.hits.fetch_add(1, Ordering::Relaxed);
+            return Ok(Some(val));
+        }
+
+        self.misses.fetch_add(1, Ordering::Relaxed);
+        Ok(None)
+    }
+
+    /// Store a value in the cache for the given arguments.
+    #[pyo3(signature = (value, *args, **kwargs))]
+    fn set<'py>(
+        &self,
+        py: Python<'py>,
+        value: Py<PyAny>,
+        args: Bound<'py, PyTuple>,
+        kwargs: Option<Bound<'py, PyDict>>,
+    ) -> PyResult<()> {
+        let cache_key = Self::make_key(py, &args, &kwargs)?;
+        let pinned = self.map.pin();
+        let mut sieve = self.sieve.lock();
+
+        // Evict if at capacity (and key is not already present)
+        if pinned.get(&cache_key).is_none() {
+            while pinned.len() >= self.capacity {
+                Self::evict_one(&mut sieve, &self.map);
+                if sieve.order.is_empty() {
+                    break;
+                }
+            }
+            let entry = SieveEntry {
+                value: value.clone_ref(py),
+                created_at: Instant::now(),
+                visited: std::sync::atomic::AtomicBool::new(false),
+            };
+            pinned.insert(cache_key.clone(), entry);
+            sieve.order.push_back(cache_key);
+        } else {
+            // Key exists — update in place
+            let entry = SieveEntry {
+                value: value.clone_ref(py),
+                created_at: Instant::now(),
+                visited: std::sync::atomic::AtomicBool::new(false),
+            };
+            pinned.insert(cache_key, entry);
+        }
+
+        Ok(())
+    }
+
+    fn cache_info(&self) -> CacheInfo {
+        let pinned = self.map.pin();
+        CacheInfo {
+            hits: self.hits.load(Ordering::Relaxed),
+            misses: self.misses.load(Ordering::Relaxed),
+            max_size: self.capacity,
+            current_size: pinned.len(),
+        }
+    }
+
+    fn cache_clear(&self) {
+        let mut sieve = self.sieve.lock();
+        sieve.order.clear();
+        sieve.hand = 0;
+        let pinned = self.map.pin();
+        pinned.clear();
+        self.hits.store(0, Ordering::Relaxed);
+        self.misses.store(0, Ordering::Relaxed);
     }
 }

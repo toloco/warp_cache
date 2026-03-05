@@ -29,7 +29,6 @@ class CachedFunction:
     def __init__(
         self,
         fn_obj: Callable[..., Any],
-        strategy: int,
         max_size: int,
         ttl: float | None = None,
     ) -> None: ...
@@ -43,7 +42,6 @@ class SharedCachedFunction:
     def __init__(
         self,
         fn_obj: Callable[..., Any],
-        strategy: int,
         max_size: int,
         ttl: float | None = None,
         max_key_size: int = 512,

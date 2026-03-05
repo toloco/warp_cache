@@ -1,12 +1,12 @@
 /// Shared-memory cache backend.
 ///
-/// Provides `ShmCache` — a cross-process LRU/MRU/FIFO/LFU cache backed
-/// by mmap. All data (header, hash table, slab arena) lives in a single
+/// Provides `ShmCache` — a cross-process SIEVE cache backed by mmap.
+/// All data (header, hash table, slab arena) lives in a single
 /// memory-mapped file. A separate mmap file holds the seqlock.
 ///
-/// Read path uses an optimistic seqlock: lock-free hash lookup + value copy,
-/// then a brief write lock only when ordering updates are needed (LRU/MRU/LFU).
-/// FIFO reads are fully lock-free. Stats are updated via atomics (no lock).
+/// Read path uses an optimistic seqlock: lock-free hash lookup + value copy.
+/// On hit, `visited` is set to 1 without a write lock (idempotent store).
+/// All reads are fully lock-free. Stats are updated via atomics (no lock).
 pub mod hashtable;
 pub mod layout;
 pub mod lock;
@@ -49,7 +49,6 @@ impl ShmCache {
     /// Create or open a shared cache.
     pub fn create_or_open(
         name: &str,
-        strategy: u32,
         capacity: u32,
         max_key_size: u32,
         max_value_size: u32,
@@ -63,7 +62,6 @@ impl ShmCache {
 
         let region = ShmRegion::create_or_open(
             name,
-            strategy,
             capacity,
             slot_size,
             max_key_size,
@@ -258,8 +256,9 @@ impl ShmCache {
 
     /// Look up a key (by hash + serialized bytes). Returns a copy of the value bytes on hit.
     ///
-    /// Uses optimistic seqlock reads. Only acquires the write lock when ordering
-    /// needs updating (LRU/MRU/LFU hit) or when removing an expired entry.
+    /// Uses optimistic seqlock reads. Fully lock-free: on hit, sets `visited=1`
+    /// via a direct store (idempotent, safe even if the slot is concurrently evicted
+    /// because the mmap memory remains valid).
     pub fn get(&self, key_hash: u64, key_bytes: &[u8]) -> ShmGetResult {
         let lock = self.lock();
 
@@ -267,31 +266,14 @@ impl ShmCache {
 
         match result {
             OptimisticResult::Hit { value, slot_index } => {
-                let strategy = self.header().strategy;
-
-                // FIFO: no ordering update needed — fully lock-free
-                if strategy != 2 {
-                    // LRU/MRU/LFU: brief write lock for ordering update
-                    lock.write_lock();
-                    unsafe {
-                        // Re-verify the slot is still valid (another writer may have evicted it)
-                        let slot_size = self.header().slot_size;
-                        let slot_ptr = self
-                            .slab_base()
-                            .add(slot_index as usize * slot_size as usize);
-                        let slot = &*(slot_ptr as *const SlotHeader);
-                        if slot.occupied != 0 && slot.key_hash == key_hash {
-                            let header = self.header_mut();
-                            ordering::on_access(
-                                header,
-                                self.slab_base_mut(),
-                                slot_size,
-                                slot_index,
-                                strategy,
-                            );
-                        }
-                    }
-                    lock.write_unlock();
+                // SIEVE: mark as visited — lock-free, idempotent store
+                unsafe {
+                    let slot_size = self.header().slot_size;
+                    let slot_ptr = self
+                        .slab_base_mut()
+                        .add(slot_index as usize * slot_size as usize);
+                    let slot = &mut *(slot_ptr as *mut SlotHeader);
+                    slot.visited = 1;
                 }
 
                 // Stats: atomic, no lock needed
@@ -343,7 +325,6 @@ impl ShmCache {
         let h = self.header();
         let ht_cap = h.ht_capacity;
         let slot_size = h.slot_size;
-        let strategy = h.strategy;
         let capacity = h.capacity;
 
         // Check if key already exists — update value in place
@@ -362,12 +343,10 @@ impl ShmCache {
             let slot = &mut *(slot_ptr as *mut SlotHeader);
             slot.value_len = value_bytes.len() as u32;
             slot.created_at_nanos = current_time_nanos();
+            slot.visited = 1;
 
             let value_dest = slot_ptr.add(SLOT_HEADER_SIZE + slot.key_len as usize);
             std::ptr::copy_nonoverlapping(value_bytes.as_ptr(), value_dest, value_bytes.len());
-
-            let header = self.header_mut();
-            ordering::on_access(header, self.slab_base_mut(), slot_size, idx, strategy);
             return;
         }
 
@@ -381,8 +360,8 @@ impl ShmCache {
             header.free_head = free_slot.next;
             idx
         } else if header.current_size >= capacity {
-            // Need to evict
-            let evict_idx = ordering::evict_candidate(header, strategy);
+            // Need to evict — SIEVE picks the victim
+            let evict_idx = ordering::sieve_evict(header, self.slab_base_mut(), slot_size);
             if evict_idx == SLOT_NONE {
                 return; // shouldn't happen
             }
@@ -425,7 +404,7 @@ impl ShmCache {
         slot.key_len = key_bytes.len() as u32;
         slot.value_len = value_bytes.len() as u32;
         slot.created_at_nanos = current_time_nanos();
-        slot.frequency = 0;
+        slot.visited = 0;
         slot.prev = SLOT_NONE;
         slot.next = SLOT_NONE;
         slot.unique_id = self.next_unique_id;
@@ -442,9 +421,9 @@ impl ShmCache {
         // Insert into hash table
         hashtable::ht_insert(self.ht_base_mut(), ht_cap, key_hash, slot_idx);
 
-        // Add to eviction list
+        // Add to eviction list (SIEVE: new entries go to tail, unvisited)
         let header = self.header_mut();
-        ordering::on_insert(header, self.slab_base_mut(), slot_size, slot_idx, strategy);
+        ordering::list_push_tail(header, self.slab_base_mut(), slot_size, slot_idx);
         header.current_size += 1;
     }
 
@@ -522,6 +501,7 @@ impl ShmCache {
         header.list_head = SLOT_NONE;
         header.list_tail = SLOT_NONE;
         header.free_head = 0;
+        header.sieve_hand = SLOT_NONE;
     }
 
     /// Increment oversize skip counter. Lock-free via atomic.

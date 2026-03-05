@@ -9,10 +9,7 @@ The Python caching ecosystem includes several notable libraries. Here's how they
 | Async support | Yes | Yes | Yes | No | No |
 | Cross-process (shared mem) | Yes (mmap) | No | No | No | No |
 | TTL support | Yes | Yes | Yes (+ TTI) | Yes | No |
-| LRU | Yes | Yes | Yes | Yes | Yes |
-| LFU | Yes | Yes | TinyLFU | Yes | No |
-| FIFO | Yes | Yes | No | Yes | No |
-| MRU | Yes | No | No | No | No |
+| Eviction | SIEVE | LRU/LFU/FIFO | TinyLFU/LRU | LRU/LFU/FIFO/RR | LRU |
 | Custom key function | No | No | No | Yes | No |
 | Stampede prevention | No | Yes | Yes | No | No |
 | Per-entry TTL | No | Yes (VTTLCache) | Yes | No | No |
@@ -25,4 +22,4 @@ The Python caching ecosystem includes several notable libraries. Here's how they
 
 These numbers come from different machines, different workloads, and different measurement methodologies — treat them as order-of-magnitude indicators, not head-to-head results.
 
-**warp_cache's niche**: the only Rust-backed cache combining shared memory (cross-process mmap), all four eviction strategies (LRU/MRU/FIFO/LFU), and builtin thread safety in a single decorator. If you need stampede prevention or per-entry TTL, look at cachebox or moka-py. If you need a custom key function, cachetools is the way to go.
+**warp_cache's niche**: the only Rust-backed cache combining shared memory (cross-process mmap), SIEVE eviction (scan-resistant, near-optimal hit rates), and builtin thread safety in a single decorator. If you need stampede prevention or per-entry TTL, look at cachebox or moka-py. If you need a custom key function, cachetools is the way to go.

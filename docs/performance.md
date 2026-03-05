@@ -13,6 +13,7 @@ Python: fn(42)
        ├─ HashMap lookup       Rust hashbrown, precomputed hash
        ├─ equality check       via ffi::PyObject_RichCompareBool
        ├─ RwLock (read)        parking_lot, ~8ns uncontended
+       ├─ SIEVE visited=1      single-word store, no lock promotion
        └─ return cached value
 ```
 
@@ -28,14 +29,6 @@ No Python wrapper function. No serialization. No intermediate key object.
 | 256 | 16,350,000 | 833,000 | 29,770,000 | 19.6x | 0.55x |
 | 512 | 17,660,000 | 960,000 | 35,710,000 | 18.4x | 0.49x |
 | 1024 | 17,710,000 | 1,184,000 | 39,780,000 | 15.0x | 0.45x |
-
-## Strategy comparison (cache size = 256)
-
-| Strategy | warp_cache (ops/s) | cachetools (ops/s) | Ratio |
-|---|---:|---:|---:|
-| LRU | 16,350,000 | 833,000 | 19.6x |
-| LFU | 6,270,000 | 770,000 | 8.1x |
-| FIFO | 15,710,000 | 921,000 | 17.1x |
 
 ## TTL throughput (cache size = 256, ttl = 60s)
 
@@ -68,7 +61,7 @@ At cache size 128, a cache hit takes ~64ns vs `lru_cache`'s ~39ns:
 | Call dispatch (`tp_call`) | ~5ns | ~10ns | +5ns |
 | Hash args (`PyObject_Hash`) | ~15ns | ~15ns | 0 |
 | Table lookup + key equality | ~10ns | ~12ns | +2ns |
-| LRU reorder (linked list) | ~5ns | ~8ns | +3ns |
+| SIEVE visited store | ~0ns | ~1ns | +1ns |
 | **Lock acquire + release** | **0ns** | **~8ns** | **+8ns** |
 | Refcount management | ~2ns | ~5ns | +3ns |
 | Return value | ~2ns | ~2ns | 0 |
@@ -118,7 +111,7 @@ runs all benchmarks.
 | 1. Serialization + Python wrapper | pickle.dumps, functools.wraps, 2 FFI crossings | ~500K ops/s | 0.02x |
 | 2. PyObject keys + Rust `__call__` | Precomputed hash, single FFI crossing | ~13-18M ops/s | 0.56-0.68x |
 | 3. Compiler: fat LTO + codegen-units=1 | Cross-crate inlining of PyO3 wrappers | +10-15% | 0.66-0.74x |
-| 4. Static dispatch via enum | Replace `Box<dyn>` with enum, enables inlining | +5% | — |
+| 4. SIEVE eviction | Replace LRU/MRU/FIFO/LFU with SIEVE, O(1) visited bit | +5% | — |
 | 5. Raw FFI for key equality | `ffi::PyObject_RichCompareBool` instead of `Python::with_gil` | +multi-thread | — |
 
 ---

@@ -50,13 +50,13 @@ def _build_contestants() -> list[Contestant]:
     contestants: list[Contestant] = []
 
     # 1. warp_cache (always available — this is the project under test)
-    from warp_cache import Strategy, cache
+    from warp_cache import cache
 
     contestants.append(
         Contestant(
             name="warp_cache",
-            make_lru=lambda sz: cache(strategy=Strategy.LRU, max_size=sz)(_identity),
-            make_ttl=lambda sz, ttl: cache(strategy=Strategy.LRU, max_size=sz, ttl=ttl)(_identity),
+            make_lru=lambda sz: cache(max_size=sz)(_identity),
+            make_ttl=lambda sz, ttl: cache(max_size=sz, ttl=ttl)(_identity),
             thread_safe=True,
             available=True,
             version="0.1.0",
@@ -238,12 +238,12 @@ def _time_loop(fn, keys: list[int]) -> float:
 
 
 def verify_correctness(n_ops: int = 50_000) -> bool:
-    from warp_cache import Strategy, cache
+    from warp_cache import cache
 
     max_size = 256
     num_keys = 500
 
-    @cache(strategy=Strategy.LRU, max_size=max_size)
+    @cache(max_size=max_size)
     def fc_fn(x: int) -> int:
         return x * 7 + 3
 
@@ -439,7 +439,7 @@ def bench_ttl(
 def bench_shared_throughput(
     n_ops: int = 100_000, max_size: int = 256
 ) -> dict[str, dict[str, float]]:
-    from warp_cache import Strategy, cache
+    from warp_cache import cache
 
     num_keys = 2000
     keys = zipf_keys(n_ops, num_keys)
@@ -447,7 +447,7 @@ def bench_shared_throughput(
 
     for backend in ("memory", "shared"):
 
-        @cache(strategy=Strategy.LRU, max_size=max_size, backend=backend)
+        @cache(max_size=max_size, backend=backend)
         def fn(x: int) -> int:
             return x
 

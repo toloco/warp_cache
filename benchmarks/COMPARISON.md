@@ -18,7 +18,7 @@ A deep comparison of three Python caching libraries: **warp_cache** (Rust/PyO3),
 | Thread-safe (builtin) | Yes | No | Yes |
 | Async support | Yes | No | No |
 | Cross-process shared memory | Yes | No | No |
-| Eviction strategies | LRU/MRU/FIFO/LFU | LRU | LRU/LFU/FIFO |
+| Eviction | SIEVE (scan-resistant) | LRU | LRU/LFU/FIFO |
 | TTL support | Yes | No | Yes |
 
 **Bottom line:** `lru_cache` is fastest single-threaded (it's C code inside CPython with zero overhead). `warp_cache` is the fastest *thread-safe* cache, 1.3x faster than `lru_cache+Lock` under the GIL and 1.4x faster without it. `moka_py` is 4-5x slower than `warp_cache` despite also being Rust. The shared memory backend reaches ~7.8M ops/s via seqlock-based optimistic reads — only ~2x slower than the in-process backend.
@@ -64,7 +64,7 @@ This means under real workloads with high hit rates (typical for caches), conten
 | Call dispatch (`tp_call`) | ~5ns | ~10ns | +5ns |
 | Hash args (`PyObject_Hash`) | ~15ns | ~15ns | 0 |
 | Table lookup + key equality | ~10ns | ~12ns | +2ns |
-| LRU reorder (linked list) | ~5ns | ~8ns | +3ns |
+| SIEVE visited store | ~0ns | ~1ns | +1ns |
 | **Lock acquire + release** | **0ns** | **~8ns** | **+8ns** |
 | Refcount management | ~2ns | ~5ns | +3ns |
 | Return value | ~2ns | ~2ns | 0 |
@@ -82,9 +82,9 @@ The three categories of overhead:
 
 Both are Rust + PyO3, yet `warp_cache` is **4.2x faster** (16.3M vs 3.9M ops/s on Python 3.13). The differences:
 
-1. **Single FFI crossing.** `warp_cache` does the entire lookup — hash, find, equality check, LRU reorder, return — in one Rust `__call__`. `moka_py` crosses the FFI boundary multiple times.
+1. **Single FFI crossing.** `warp_cache` does the entire lookup — hash, find, equality check, SIEVE visited update, return — in one Rust `__call__`. `moka_py` crosses the FFI boundary multiple times.
 
-2. **Static dispatch.** `warp_cache` uses an `enum` over strategy types (`StrategyEnum`), allowing the compiler to inline and devirtualize. No `Box<dyn>` indirection.
+2. **SIEVE eviction.** `warp_cache` uses SIEVE — a simple algorithm where cache hits just set a `visited` bit (a single-word store). No linked-list reordering on the hot path.
 
 3. **Precomputed hash + raw C equality.** `CacheKey` stores the Python hash once and uses `ffi::PyObject_RichCompareBool` directly — the same raw C call that `lru_cache` uses.
 
@@ -142,25 +142,21 @@ Python: fn(42)
        └─ return cached value
 ```
 
-### 2. Read-lock fast path + deferred access log
+### 2. SIEVE eviction with read-lock fast path
 
-Cache hits acquire only a **read lock** (`store.rs` lines 110-139). The LRU reorder is deferred — instead of immediately promoting the accessed key (which would require a write lock), the key is pushed to a bounded access log. The log is drained on the next cache miss (under a write lock).
+Cache hits acquire only a **read lock** and set `visited = 1` — a single-word store that requires no linked-list reordering. This means cache hits never need a write lock, reducing contention to near-zero under high hit rates (~65%+ in these benchmarks).
 
-This means cache hits under high hit rates (~65%+ in these benchmarks) almost never contend for the write lock.
+Only cache misses and evictions acquire the write lock, where the SIEVE hand scans for an unvisited entry to evict.
 
-### 3. Enum static dispatch
-
-Eviction strategies are dispatched via a Rust `enum` (`StrategyEnum`) with `#[inline(always)]` on every method. The compiler knows all variants at compile time and can inline the specific strategy code directly into the hot path. Compare with `Box<dyn EvictionStrategy>`, which requires vtable indirection on every call.
-
-### 4. Precomputed hash + raw C API equality
+### 3. Precomputed hash + raw C API equality
 
 `CacheKey` computes `PyObject_Hash` once at key creation and stores the result. HashMap lookups use the precomputed hash directly. Key equality uses raw `ffi::PyObject_RichCompareBool` — the exact same C call that `lru_cache` uses — bypassing PyO3's safe-but-slower `Python::with_gil` wrapper.
 
-### 5. parking_lot::RwLock (~8ns)
+### 4. parking_lot::RwLock (~8ns)
 
 `parking_lot` provides a significantly faster mutex than `std::sync::RwLock` (~8ns vs ~25ns uncontended on arm64). It uses adaptive spinning before parking, reducing syscall overhead.
 
-### 6. Fat LTO + codegen-units=1
+### 5. Fat LTO + codegen-units=1
 
 The release profile enables fat link-time optimization across all crates (including PyO3) and forces single-codegen-unit compilation. This allows the compiler to inline PyO3's FFI wrappers directly into `warp_cache`'s hot path, eliminating call overhead at the boundary.
 
@@ -170,7 +166,7 @@ lto = "fat"
 codegen-units = 1
 ```
 
-### 7. Atomic hit/miss counters
+### 6. Atomic hit/miss counters
 
 Hit and miss counts use `AtomicU64` with `Ordering::Relaxed` — no memory barriers, no cache-line bouncing on single-socket machines. Stats collection is essentially free.
 
@@ -195,7 +191,7 @@ The shared backend uses:
 - **Pickle serialization** for values (required for cross-process compatibility)
 - **Atomic stats** — `hits`, `misses`, and `oversize_skips` use `AtomicU64`, so `info()` and `record_oversize_skip()` never acquire a lock
 
-The read path splits into two phases: (1) an optimistic lock-free hash lookup + value copy under the seqlock, retried if a writer was active; (2) a brief write lock only when ordering needs updating (LRU/MRU/LFU hit). FIFO cache hits are fully lock-free. TTL-expired entries are detected during the optimistic read, then cleaned up under the write lock with re-verification.
+The read path uses an optimistic lock-free hash lookup + value copy under the seqlock, retried if a writer was active. On hit, the `visited` bit is set via a direct idempotent store — no write lock needed. All cache hits are fully lock-free. TTL-expired entries are detected during the optimistic read, then cleaned up under the write lock with re-verification.
 
 The ~2x throughput gap between memory and shared backend is dominated by pickle serialization (the lock itself is near-free on the read path). The shared backend is still orders of magnitude faster than network-based caches (Redis: ~100-500K ops/s over localhost).
 
@@ -210,10 +206,7 @@ The ~2x throughput gap between memory and shared backend is dominated by pickle 
 | Async support | Yes (auto-detect) | No | No |
 | Cross-process (shared mem) | Yes (mmap) | No | No |
 | TTL support | Yes | No | Yes |
-| LRU eviction | Yes | Yes | Yes |
-| LFU eviction | Yes | No | Yes |
-| FIFO eviction | Yes | No | Yes |
-| MRU eviction | Yes | No | No |
+| Eviction | SIEVE (scan-resistant) | LRU | LRU/LFU/FIFO |
 | Cache statistics | Yes (hits/misses) | Yes (hits/misses) | No |
 | `cache_clear()` | Yes | Yes | No |
 | Decorator API | `@cache()` | `@lru_cache()` | `Moka(maxsize)` |

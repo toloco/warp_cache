@@ -20,10 +20,10 @@ import hashlib
 import json
 import os
 
-from warp_cache import Strategy, cache
+from warp_cache import cache
 
 
-@cache(strategy=Strategy.LRU, max_size=1024, ttl=60.0, backend="shared")
+@cache(max_size=1024, ttl=60.0, backend="shared")
 def expensive_compute(n):
     """Simulate a CPU-heavy computation shared across workers."""
     data = str(n).encode()

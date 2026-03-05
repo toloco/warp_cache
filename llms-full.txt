@@ -1,6 +1,6 @@
 # warp_cache
 
-> warp_cache is a thread-safe Python caching decorator backed by a Rust extension (PyO3). It provides LRU/MRU/FIFO/LFU eviction, TTL support, async awareness, and a cross-process shared memory backend. It is a drop-in replacement for `functools.lru_cache` with added thread safety and features.
+> warp_cache is a thread-safe Python caching decorator backed by a Rust extension (PyO3). It uses SIEVE eviction (scan-resistant, near-optimal hit rates), with TTL support, async awareness, and a cross-process shared memory backend. It is a drop-in replacement for `functools.lru_cache` with added thread safety and features.
 
 ## Installation
 
@@ -15,18 +15,17 @@ Prebuilt wheels are available for Linux (x86_64, aarch64), macOS (x86_64, arm64)
 All public names are importable from `warp_cache`:
 
 ```python
-from warp_cache import cache, lru_cache, Strategy, Backend, CacheInfo, SharedCacheInfo
+from warp_cache import cache, lru_cache, Backend, CacheInfo, SharedCacheInfo
 ```
 
 ### `cache()` decorator
 
-The main decorator. Wraps a function with a Rust-backed cache.
+The main decorator. Wraps a function with a Rust-backed cache using SIEVE eviction.
 
 ```python
 from warp_cache import cache
 
 @cache(
-    strategy=Strategy.LRU,     # Eviction strategy (LRU, MRU, FIFO, LFU)
     max_size=128,              # Maximum number of cached entries
     ttl=None,                  # Time-to-live in seconds (None = no expiry)
     backend="memory",          # "memory" (in-process) or "shared" (cross-process mmap)
@@ -41,7 +40,7 @@ All arguments to the decorated function must be hashable.
 
 ### `lru_cache()` decorator
 
-Convenience shorthand for `cache(strategy=Strategy.LRU, ...)`. Accepts all the same parameters except `strategy`.
+Convenience shorthand for `cache(...)`. Accepts all the same parameters.
 
 ```python
 from warp_cache import lru_cache
@@ -50,17 +49,6 @@ from warp_cache import lru_cache
 def my_function(x):
     return x * x
 ```
-
-### `Strategy` enum
-
-Controls eviction when the cache is full. `Strategy` is an `IntEnum`.
-
-| Strategy        | Value | Evicts                   | Best for                             |
-|-----------------|-------|--------------------------|--------------------------------------|
-| `Strategy.LRU`  | `0`   | Least recently used      | General-purpose caching (default)    |
-| `Strategy.MRU`  | `1`   | Most recently used       | Scans where old items are re-accessed|
-| `Strategy.FIFO` | `2`   | Oldest insertion         | Simple age-based rotation            |
-| `Strategy.LFU`  | `3`   | Least frequently used    | Skewed access patterns with hot keys |
 
 ### `Backend` enum
 
@@ -202,21 +190,6 @@ Shared backend details:
 - File location: `/dev/shm/` on Linux, `$TMPDIR/warp_cache/` on macOS
 - Not available on Windows (`backend="memory"` works everywhere)
 - Monitor oversize skips: `fn.cache_info().oversize_skips`
-
-### Eviction strategies
-
-```python
-from warp_cache import cache, Strategy
-
-@cache(strategy=Strategy.LRU, max_size=256)
-def fetch(url): ...
-
-@cache(strategy=Strategy.LFU, max_size=1000)
-def lookup(key): ...
-
-@cache(strategy=Strategy.FIFO, max_size=100)
-def rotate(item): ...
-```
 
 ## Platform support
 

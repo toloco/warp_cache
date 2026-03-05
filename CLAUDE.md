@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**warp_cache** — a thread-safe Python caching decorator backed by a Rust extension (PyO3 + maturin). Provides LRU/MRU/FIFO/LFU eviction, TTL support, async awareness, and a cross-process shared memory backend.
+**warp_cache** — a thread-safe Python caching decorator backed by a Rust extension (PyO3 + maturin). Uses SIEVE eviction, with TTL support, async awareness, and a cross-process shared memory backend.
 
 ## Build & Test Commands
 
@@ -35,29 +35,29 @@ make test PYTHON=3.13   # Specific version
 ### Rust core (`src/`)
 
 - **`lib.rs`** — PyO3 module entry, exports `CachedFunction`, `SharedCachedFunction`, info types
-- **`store.rs`** — In-process backend: `CachedFunction` wraps `parking_lot::RwLock<CacheStoreInner>`. The `__call__` method does the entire cache lookup in Rust (hash → lookup → equality check → LRU reorder → return) in a single FFI crossing
+- **`store.rs`** — In-process backend: `CachedFunction` uses `parking_lot::RwLock` + `papaya::HashMap`. The `__call__` method does the entire cache lookup in Rust (hash → lookup → equality check → SIEVE visited update → return) in a single FFI crossing
 - **`serde.rs`** — Fast-path binary serialization for common primitives (None, bool, int, float, str, bytes, flat tuples); avoids pickle overhead for the shared backend
 - **`shared_store.rs`** — Cross-process backend: `SharedCachedFunction` serializes via serde.rs (with pickle fallback), stores in mmap'd shared memory
-- **`entry.rs`** — `CacheEntry` { value, created_at, frequency }
+- **`entry.rs`** — `CacheEntry` { value, created_at, visited }
 - **`key.rs`** — `CacheKey` wraps `Py<PyAny>` + precomputed hash; uses raw `ffi::PyObject_RichCompareBool` for equality (safe because called inside `#[pymethods]` where GIL is held)
-- **`strategies/`** — Enum-based static dispatch (`StrategyEnum`) over LRU/MRU/FIFO/LFU (avoids `Box<dyn>` overhead). LRU uses `hashlink::LruCache`
 - **`shm/`** — Shared memory infrastructure:
   - `mod.rs` — `ShmCache`: create/open, get/set with serialized bytes
   - `layout.rs` — Header + SlotHeader structs, memory offsets
   - `region.rs` — `ShmRegion`: mmap file management (`$TMPDIR/warp_cache/{name}.cache`)
   - `lock.rs` — `ShmSeqLock`: seqlock (optimistic reads + TTAS spinlock) in shared memory
   - `hashtable.rs` — Open-addressing with linear probing (power-of-2 capacity, bitmask)
-  - `ordering.rs` — Eviction ordering state in shared memory
+  - `ordering.rs` — SIEVE eviction: intrusive linked list + `sieve_evict()` hand scan
 
 ### Python layer (`warp_cache/`)
 
-- **`_decorator.py`** — `cache()` factory: dispatches to `CachedFunction` (memory) or `SharedCachedFunction` (shared). Auto-detects async functions and wraps with `AsyncCachedFunction` (cache hit in Rust, only misses `await` the coroutine). Also exports `lru_cache()` — a convenience shorthand for `cache(strategy=Strategy.LRU, ...)`
-- **`_strategies.py`** — `Strategy(IntEnum)`: LRU=0, MRU=1, FIFO=2, LFU=3
+- **`_decorator.py`** — `cache()` factory: dispatches to `CachedFunction` (memory) or `SharedCachedFunction` (shared). Auto-detects async functions and wraps with `AsyncCachedFunction` (cache hit in Rust, only misses `await` the coroutine). Also exports `lru_cache()` — a convenience shorthand
+- **`_strategies.py`** — `Backend(IntEnum)`: MEMORY=0, SHARED=1
 
 ### Key design decisions
 
 - **Single FFI crossing**: entire cache lookup happens in Rust `__call__`, no Python wrapper overhead
 - **Release profile**: fat LTO + `codegen-units=1` for cross-crate inlining of PyO3 wrappers
+- **SIEVE eviction**: unified across both backends. On hit, sets `visited=1` (single-word store). On evict, hand scans for unvisited entry. Lock-free reads on both backends
 - **Thread safety**: `parking_lot::RwLock` (~8ns uncontended) for in-process backend; seqlock (optimistic reads + TTAS spinlock) for shared backend. Enables true parallel reads under free-threaded Python (3.13t+)
 
 ## Critical Invariants

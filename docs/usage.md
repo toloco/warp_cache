@@ -32,30 +32,16 @@ If you need to cache a function that takes unhashable arguments, convert them
 to hashable equivalents before passing (e.g. `tuple(my_list)`,
 `tuple(sorted(my_dict.items()))`).
 
-## Eviction strategies
+## Eviction
 
-The `Strategy` enum controls how entries are evicted when the cache is full:
+warp_cache uses **SIEVE** eviction — a simple, scan-resistant algorithm that provides near-optimal hit rates with O(1) overhead per access. There is no strategy parameter; SIEVE is used automatically for both the memory and shared backends.
 
-```python
-from warp_cache import cache, Strategy
+SIEVE works by maintaining a `visited` bit on each cache entry:
 
-@cache(strategy=Strategy.LRU, max_size=256)
-def fetch(url):
-    ...
+- **On cache hit**: the entry's `visited` bit is set to 1 (protecting it from eviction)
+- **On eviction**: a rotating "hand" scans the cache. Entries with `visited=1` get a second chance (bit cleared to 0, hand advances). The first entry found with `visited=0` is evicted.
 
-@cache(strategy=Strategy.LFU, max_size=1000)
-def lookup(key):
-    ...
-```
-
-| Strategy | Value | Evicts | Best for |
-|----------|-------|--------|----------|
-| `Strategy.LRU` | `0` | Least recently used (default) | General-purpose caching |
-| `Strategy.MRU` | `1` | Most recently used | Scans where old items are re-accessed |
-| `Strategy.FIFO` | `2` | Oldest insertion | Simple age-based rotation |
-| `Strategy.LFU` | `3` | Least frequently used | Skewed access patterns with hot keys |
-
-`Strategy` is an `IntEnum`, so you can also pass the integer value directly (e.g. `strategy=0` for LRU).
+This means frequently-accessed entries are protected, while entries that were cached but never re-accessed are evicted first — similar to LRU but with better scan resistance and lower overhead.
 
 ## Async functions
 
@@ -135,7 +121,7 @@ def get_embedding(text: str) -> list[float]:
   - **Lock file** — holds a seqlock (sequence counter + spinlock) for cross-process synchronization. Reads are optimistic and lock-free; only writes acquire the spinlock
 - File location: `/dev/shm/` on Linux, `$TMPDIR/warp_cache/` on macOS
 - The file name is derived deterministically from the function's `__module__` and `__qualname__`, so the same function in different processes maps to the same cache automatically
-- If an existing cache file has different parameters (capacity, strategy, key/value sizes), it is recreated
+- If an existing cache file has different parameters (capacity, key/value sizes, version), it is recreated
 
 **Serialization overhead:**
 
@@ -203,7 +189,6 @@ with ThreadPoolExecutor(max_workers=8) as pool:
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `strategy` | `Strategy` | `Strategy.LRU` | Eviction strategy |
 | `max_size` | `int` | `128` | Maximum number of cached entries |
 | `ttl` | `float \| None` | `None` | Time-to-live in seconds (`None` = no expiry) |
 | `backend` | `str \| int \| Backend` | `Backend.MEMORY` | `"memory"` for in-process, `"shared"` for cross-process |

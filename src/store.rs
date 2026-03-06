@@ -1,20 +1,146 @@
+use std::cell::UnsafeCell;
 use std::collections::VecDeque;
+use std::hash::{BuildHasher, Hasher};
+use std::ops::{Deref, DerefMut};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use hashbrown::HashMap;
-use parking_lot::RwLock;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyTuple};
+use pyo3::{ffi, Bound, PyErr};
 
 use crate::entry::SieveEntry;
-use crate::key::CacheKey;
+use crate::key::{BorrowedArgs, CacheKey};
 
 const MAX_SHARDS: usize = 16;
 const MIN_SHARD_SIZE: usize = 8;
 
+// ---------------------------------------------------------------------------
+// Passthrough hasher: CacheKey already carries a well-distributed Python hash.
+// Re-hashing it through foldhash (hashbrown's default) wastes ~1-2ns per
+// lookup. This hasher stores the hash verbatim.
+// ---------------------------------------------------------------------------
+struct PassthroughHasher(u64);
+
+impl Hasher for PassthroughHasher {
+    #[inline(always)]
+    fn finish(&self) -> u64 {
+        self.0
+    }
+    #[inline(always)]
+    fn write(&mut self, bytes: &[u8]) {
+        // Fallback: interpret first 8 bytes as u64.
+        debug_assert!(bytes.len() >= 8, "PassthroughHasher expects >= 8 bytes");
+        self.0 = u64::from_ne_bytes(bytes[..8].try_into().unwrap());
+    }
+    #[inline(always)]
+    fn write_isize(&mut self, i: isize) {
+        self.0 = i as u64;
+    }
+    #[inline(always)]
+    fn write_i64(&mut self, i: i64) {
+        self.0 = i as u64;
+    }
+    #[inline(always)]
+    fn write_u64(&mut self, i: u64) {
+        self.0 = i;
+    }
+}
+
+#[derive(Clone, Default)]
+struct PassthroughBuildHasher;
+
+impl BuildHasher for PassthroughBuildHasher {
+    type Hasher = PassthroughHasher;
+    #[inline(always)]
+    fn build_hasher(&self) -> PassthroughHasher {
+        PassthroughHasher(0)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// GIL-conditional lock: under GIL-enabled Python the GIL already serialises
+// all #[pymethods] access, so the per-shard RwLock is pure overhead (~8ns).
+// Under free-threaded Python (3.13t+) we need real locking.
+// ---------------------------------------------------------------------------
+
+#[cfg(Py_GIL_DISABLED)]
+type ShardLock = parking_lot::RwLock<Shard>;
+
+#[cfg(not(Py_GIL_DISABLED))]
+type ShardLock = GilCell<Shard>;
+
+/// Zero-cost lock substitute for GIL-enabled builds.
+///
+/// SAFETY: All access is through `#[pymethods]` which hold the GIL.
+/// We never call `py.allow_threads()` while a guard is live.
+#[cfg(not(Py_GIL_DISABLED))]
+struct GilCell<T>(UnsafeCell<T>);
+
+#[cfg(not(Py_GIL_DISABLED))]
+unsafe impl<T: Send> Send for GilCell<T> {}
+#[cfg(not(Py_GIL_DISABLED))]
+unsafe impl<T: Send> Sync for GilCell<T> {}
+
+#[cfg(not(Py_GIL_DISABLED))]
+impl<T> GilCell<T> {
+    fn new(val: T) -> Self {
+        GilCell(UnsafeCell::new(val))
+    }
+
+    #[inline(always)]
+    fn read(&self) -> GilReadGuard<'_, T> {
+        GilReadGuard(&self.0)
+    }
+
+    #[inline(always)]
+    fn write(&self) -> GilWriteGuard<'_, T> {
+        GilWriteGuard(&self.0)
+    }
+}
+
+#[cfg(not(Py_GIL_DISABLED))]
+struct GilReadGuard<'a, T>(&'a UnsafeCell<T>);
+
+#[cfg(not(Py_GIL_DISABLED))]
+impl<T> Drop for GilReadGuard<'_, T> {
+    #[inline(always)]
+    fn drop(&mut self) {}
+}
+
+#[cfg(not(Py_GIL_DISABLED))]
+impl<T> Deref for GilReadGuard<'_, T> {
+    type Target = T;
+    #[inline(always)]
+    fn deref(&self) -> &T {
+        // SAFETY: GIL is held; no concurrent writers.
+        unsafe { &*self.0.get() }
+    }
+}
+
+#[cfg(not(Py_GIL_DISABLED))]
+struct GilWriteGuard<'a, T>(&'a UnsafeCell<T>);
+
+#[cfg(not(Py_GIL_DISABLED))]
+impl<T> Deref for GilWriteGuard<'_, T> {
+    type Target = T;
+    #[inline(always)]
+    fn deref(&self) -> &T {
+        unsafe { &*self.0.get() }
+    }
+}
+
+#[cfg(not(Py_GIL_DISABLED))]
+impl<T> DerefMut for GilWriteGuard<'_, T> {
+    #[inline(always)]
+    fn deref_mut(&mut self) -> &mut T {
+        unsafe { &mut *self.0.get() }
+    }
+}
+
 struct Shard {
-    map: HashMap<CacheKey, SieveEntry>,
+    map: HashMap<CacheKey, SieveEntry, PassthroughBuildHasher>,
     order: VecDeque<CacheKey>,
     hand: usize,
     capacity: usize,
@@ -45,8 +171,8 @@ impl CacheInfo {
 #[pyclass(frozen)]
 pub struct CachedFunction {
     fn_obj: Py<PyAny>,
-    shards: Box<[RwLock<Shard>]>,
-    n_shards: usize,
+    shards: Box<[ShardLock]>,
+    shard_mask: usize,
     ttl: Option<Duration>,
     max_size: usize,
     hits: AtomicU64,
@@ -128,6 +254,45 @@ impl CachedFunction {
         };
         CacheKey::new(py, key_obj)
     }
+
+    /// Compute hash + key pointer for the common no-kwargs fast path, or fall
+    /// back to building a composite key object when kwargs are present.
+    /// Returns `(hash, key_ptr)` where key_ptr is the raw PyObject* to compare.
+    /// On the kwargs path, also returns an owned Py<PyAny> to keep the
+    /// composite key alive; on the no-kwargs path this is None.
+    #[inline(always)]
+    fn hash_args<'py>(
+        py: Python<'py>,
+        args: &Bound<'py, PyTuple>,
+        kwargs: &Option<Bound<'py, PyDict>>,
+    ) -> PyResult<(isize, *mut ffi::PyObject, Option<Py<PyAny>>)> {
+        match kwargs {
+            Some(ref kw) if !kw.is_empty() => {
+                // Rare path: build composite key, hash it
+                let builtins = py.import("builtins")?;
+                let items = kw.call_method0("items")?;
+                let sorted_items = builtins.call_method1("sorted", (items,))?;
+                let kw_tup = builtins.getattr("tuple")?.call1((sorted_items,))?;
+                let combined = PyTuple::new(py, [args.as_any().clone(), kw_tup])?;
+                let key_obj: Py<PyAny> = combined.unbind().into();
+                let ptr = key_obj.as_ptr();
+                let hash = unsafe { ffi::PyObject_Hash(ptr) };
+                if hash == -1 {
+                    return Err(PyErr::fetch(py));
+                }
+                Ok((hash, ptr, Some(key_obj)))
+            }
+            _ => {
+                // Fast path: hash the args tuple directly via raw FFI
+                let ptr = args.as_ptr();
+                let hash = unsafe { ffi::PyObject_Hash(ptr) };
+                if hash == -1 {
+                    return Err(PyErr::fetch(py));
+                }
+                Ok((hash, ptr, None))
+            }
+        }
+    }
 }
 
 #[pymethods]
@@ -135,22 +300,40 @@ impl CachedFunction {
     #[new]
     #[pyo3(signature = (fn_obj, max_size, ttl=None))]
     fn new(fn_obj: Py<PyAny>, max_size: usize, ttl: Option<f64>) -> Self {
-        let n_shards = (max_size / MIN_SHARD_SIZE).clamp(1, MAX_SHARDS);
+        let n_shards = (max_size / MIN_SHARD_SIZE)
+            .clamp(1, MAX_SHARDS)
+            .next_power_of_two()
+            .min(MAX_SHARDS);
         let per_shard = max_size.div_ceil(n_shards);
-        let shards: Vec<RwLock<Shard>> = (0..n_shards)
+
+        #[cfg(Py_GIL_DISABLED)]
+        let shards: Vec<ShardLock> = (0..n_shards)
             .map(|_| {
-                RwLock::new(Shard {
-                    map: HashMap::with_capacity(per_shard),
+                parking_lot::RwLock::new(Shard {
+                    map: HashMap::with_capacity_and_hasher(per_shard, PassthroughBuildHasher),
                     order: VecDeque::with_capacity(per_shard),
                     hand: 0,
                     capacity: per_shard,
                 })
             })
             .collect();
+
+        #[cfg(not(Py_GIL_DISABLED))]
+        let shards: Vec<ShardLock> = (0..n_shards)
+            .map(|_| {
+                GilCell::new(Shard {
+                    map: HashMap::with_capacity_and_hasher(per_shard, PassthroughBuildHasher),
+                    order: VecDeque::with_capacity(per_shard),
+                    hand: 0,
+                    capacity: per_shard,
+                })
+            })
+            .collect();
+
         CachedFunction {
             fn_obj,
             shards: shards.into_boxed_slice(),
-            n_shards,
+            shard_mask: n_shards - 1,
             ttl: ttl.map(Duration::from_secs_f64),
             max_size,
             hits: AtomicU64::new(0),
@@ -165,25 +348,15 @@ impl CachedFunction {
         args: Bound<'py, PyTuple>,
         kwargs: Option<Bound<'py, PyDict>>,
     ) -> PyResult<Py<PyAny>> {
-        // Build the cache key
-        let key_obj: Py<PyAny> = match kwargs {
-            Some(ref kw) if !kw.is_empty() => {
-                let builtins = py.import("builtins")?;
-                let items = kw.call_method0("items")?;
-                let sorted_items = builtins.call_method1("sorted", (items,))?;
-                let kw_tup = builtins.getattr("tuple")?.call1((sorted_items,))?;
-                let combined = PyTuple::new(py, [args.as_any().clone(), kw_tup])?;
-                combined.unbind().into()
-            }
-            _ => args.clone().unbind().into(),
-        };
-        let cache_key = CacheKey::new(py, key_obj)?;
-        let shard_idx = cache_key.shard_index(self.n_shards);
+        // Step 1: compute hash + pointer without creating a CacheKey
+        let (hash, key_ptr, _key_owner) = Self::hash_args(py, &args, &kwargs)?;
+        let borrowed = BorrowedArgs { hash, ptr: key_ptr };
+        let shard_idx = hash as usize & self.shard_mask;
 
-        // FAST PATH: read lock on one shard
+        // FAST PATH: read lock on one shard, lookup via BorrowedArgs
         {
             let shard = self.shards[shard_idx].read();
-            if let Some(entry) = shard.map.get(&cache_key) {
+            if let Some(entry) = shard.map.get(&borrowed) {
                 if let Some(ttl) = self.ttl {
                     if entry.created_at.elapsed() <= ttl {
                         entry.visited.store(true, Ordering::Relaxed);
@@ -206,7 +379,20 @@ impl CachedFunction {
         // Cache miss: call the wrapped function (no lock held)
         let result = self.fn_obj.bind(py).call(args, kwargs.as_ref())?.unbind();
 
-        // SLOW PATH: write lock, double-check, evict if needed, insert
+        // SLOW PATH: write lock, double-check, evict if needed, insert.
+        // NOW create a CacheKey since we need to store it.
+        let cache_key = match _key_owner {
+            Some(obj) => CacheKey::with_hash(hash, obj),
+            None => {
+                // No-kwargs path: incref the args tuple for storage
+                let obj: Py<PyAny> = unsafe {
+                    ffi::Py_IncRef(key_ptr);
+                    Bound::from_owned_ptr(py, key_ptr).unbind()
+                };
+                CacheKey::with_hash(hash, obj)
+            }
+        };
+
         {
             let mut shard = self.shards[shard_idx].write();
 
@@ -256,11 +442,12 @@ impl CachedFunction {
         args: Bound<'py, PyTuple>,
         kwargs: Option<Bound<'py, PyDict>>,
     ) -> PyResult<Option<Py<PyAny>>> {
-        let cache_key = Self::make_key(py, &args, &kwargs)?;
-        let shard_idx = cache_key.shard_index(self.n_shards);
+        let (hash, key_ptr, _key_owner) = Self::hash_args(py, &args, &kwargs)?;
+        let borrowed = BorrowedArgs { hash, ptr: key_ptr };
+        let shard_idx = hash as usize & self.shard_mask;
 
         let shard = self.shards[shard_idx].read();
-        if let Some(entry) = shard.map.get(&cache_key) {
+        if let Some(entry) = shard.map.get(&borrowed) {
             if let Some(ttl) = self.ttl {
                 if entry.created_at.elapsed() > ttl {
                     drop(shard);
@@ -290,7 +477,7 @@ impl CachedFunction {
         kwargs: Option<Bound<'py, PyDict>>,
     ) -> PyResult<()> {
         let cache_key = Self::make_key(py, &args, &kwargs)?;
-        let shard_idx = cache_key.shard_index(self.n_shards);
+        let shard_idx = cache_key.shard_index(self.shard_mask);
 
         let mut shard = self.shards[shard_idx].write();
 

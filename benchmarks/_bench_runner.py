@@ -247,6 +247,15 @@ def _time_loop(fn, keys: list[int]) -> float:
     return time.perf_counter() - t0
 
 
+def _median(values: list[float]) -> float:
+    """Return the median of a list of floats (no numpy dependency)."""
+    s = sorted(values)
+    n = len(s)
+    if n % 2 == 1:
+        return s[n // 2]
+    return (s[n // 2 - 1] + s[n // 2]) / 2
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Benchmark 1 — Correctness verification
 # ═══════════════════════════════════════════════════════════════════════════
@@ -287,6 +296,7 @@ def bench_throughput(
     contestants: list[Contestant],
     cache_sizes: list[int],
     n_ops: int = 100_000,
+    rounds: int = 3,
 ) -> dict:
     num_keys = 2000
     keys = zipf_keys(n_ops, num_keys)
@@ -299,15 +309,21 @@ def bench_throughput(
     for sz in cache_sizes:
         sz_results: dict[str, float] = {}
         for c in regular:
-            fn = c.make_lru(sz)
-            elapsed = _time_loop(fn, keys)
-            sz_results[c.name] = n_ops / elapsed
+            samples = []
+            for _ in range(rounds):
+                fn = c.make_lru(sz)
+                elapsed = _time_loop(fn, keys)
+                samples.append(n_ops / elapsed)
+            sz_results[c.name] = _median(samples)
         results[str(sz)] = sz_results
 
     if zoo_contestant:
-        fn = zoo_contestant.make_lru(0)
-        elapsed = _time_loop(fn, keys)
-        results["zoocache_unbounded"] = {"zoocache": n_ops / elapsed}
+        samples = []
+        for _ in range(rounds):
+            fn = zoo_contestant.make_lru(0)
+            elapsed = _time_loop(fn, keys)
+            samples.append(n_ops / elapsed)
+        results["zoocache_unbounded"] = {"zoocache": _median(samples)}
 
     return results
 
@@ -322,6 +338,7 @@ def bench_threading(
     thread_counts: list[int],
     n_ops: int = 100_000,
     max_size: int = 256,
+    rounds: int = 3,
 ) -> dict:
     num_keys = 2000
     results: dict[str, dict[str, float]] = {}
@@ -334,30 +351,34 @@ def bench_threading(
         tc_results: dict[str, float] = {}
 
         for c in active:
-            fn = c.make_lru(max_size)
+            samples = []
+            for _ in range(rounds):
+                fn = c.make_lru(max_size)
 
-            if c.thread_safe:
+                if c.thread_safe:
 
-                def worker(f=fn):
-                    for k in keys_per_thread:
-                        f(k)
-            else:
-                lock = threading.Lock()
-
-                def worker(f=fn, lk=lock):
-                    for k in keys_per_thread:
-                        with lk:
+                    def worker(f=fn):
+                        for k in keys_per_thread:
                             f(k)
+                else:
+                    lock = threading.Lock()
 
-            t0 = time.perf_counter()
-            with ThreadPoolExecutor(max_workers=n_threads) as pool:
-                futs = [pool.submit(worker) for _ in range(n_threads)]
-                for f in futs:
-                    f.result()
-            elapsed = time.perf_counter() - t0
+                    def worker(f=fn, lk=lock):
+                        for k in keys_per_thread:
+                            with lk:
+                                f(k)
 
-            total_ops = ops_per_thread * n_threads
-            tc_results[c.name] = total_ops / elapsed
+                t0 = time.perf_counter()
+                with ThreadPoolExecutor(max_workers=n_threads) as pool:
+                    futs = [pool.submit(worker) for _ in range(n_threads)]
+                    for f in futs:
+                        f.result()
+                elapsed = time.perf_counter() - t0
+
+                total_ops = ops_per_thread * n_threads
+                samples.append(total_ops / elapsed)
+
+            tc_results[c.name] = _median(samples)
 
         results[str(n_threads)] = tc_results
 
@@ -455,6 +476,7 @@ def bench_async_throughput(
     contestants: list[Contestant],
     cache_sizes: list[int],
     n_ops: int = 100_000,
+    rounds: int = 3,
 ) -> dict:
     """Benchmark async cached function throughput (cache hits via event loop)."""
     num_keys = 2000
@@ -466,25 +488,31 @@ def bench_async_throughput(
     for sz in cache_sizes:
         sz_results: dict[str, float] = {}
         for c in async_contestants:
-            fn = c.make_async_lru(sz)
+            samples = []
+            for _ in range(rounds):
+                fn = c.make_async_lru(sz)
 
-            async def _run(f=fn):
-                for k in keys:
-                    await f(k)
+                async def _run(f=fn):
+                    for k in keys:
+                        await f(k)
 
-            t0 = time.perf_counter()
-            asyncio.run(_run())
-            elapsed = time.perf_counter() - t0
-            sz_results[c.name] = n_ops / elapsed
+                t0 = time.perf_counter()
+                asyncio.run(_run())
+                elapsed = time.perf_counter() - t0
+                samples.append(n_ops / elapsed)
+            sz_results[c.name] = _median(samples)
 
         results[str(sz)] = sz_results
 
     # Also measure sync for comparison (same contestants that have async)
     sync_results: dict[str, float] = {}
     for c in async_contestants:
-        fn = c.make_lru(256)
-        elapsed = _time_loop(fn, keys)
-        sync_results[c.name] = n_ops / elapsed
+        samples = []
+        for _ in range(rounds):
+            fn = c.make_lru(256)
+            elapsed = _time_loop(fn, keys)
+            samples.append(n_ops / elapsed)
+        sync_results[c.name] = _median(samples)
     results["sync_256"] = sync_results
 
     return results
@@ -496,7 +524,7 @@ def bench_async_throughput(
 
 
 def bench_shared_throughput(
-    n_ops: int = 100_000, max_size: int = 256
+    n_ops: int = 100_000, max_size: int = 256, rounds: int = 3
 ) -> dict[str, dict[str, float]]:
     from warp_cache import cache
 
@@ -505,21 +533,25 @@ def bench_shared_throughput(
     results: dict[str, dict[str, float]] = {}
 
     for backend in ("memory", "shared"):
+        samples = []
+        for _ in range(rounds):
 
-        @cache(max_size=max_size, backend=backend)
-        def fn(x: int) -> int:
-            return x
+            @cache(max_size=max_size, backend=backend)
+            def fn(x: int) -> int:
+                return x
 
-        t0 = time.perf_counter()
-        for k in keys:
-            fn(k)
-        elapsed = time.perf_counter() - t0
+            t0 = time.perf_counter()
+            for k in keys:
+                fn(k)
+            elapsed = time.perf_counter() - t0
+            samples.append(n_ops / elapsed)
 
+        # Hit rate from last round (deterministic with same keys)
         info = fn.cache_info()
         total = info.hits + info.misses
         hit_rate = info.hits / total if total else 0.0
 
-        results[backend] = {"ops_per_sec": n_ops / elapsed, "hit_rate": hit_rate}
+        results[backend] = {"ops_per_sec": _median(samples), "hit_rate": hit_rate}
 
     return results
 
@@ -614,6 +646,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="warp_cache benchmark runner")
     parser.add_argument("--tag", required=True, help="Label for this run (e.g. py3.12)")
     parser.add_argument("--quick", action="store_true", help="Skip sustained & TTL benchmarks")
+    parser.add_argument("--rounds", type=int, default=3, help="Rounds per burst benchmark (median)")
     args = parser.parse_args()
 
     info = python_info()
@@ -627,6 +660,7 @@ def main() -> None:
     print(f"Python {info['version']}{tag_suffix}  [{info['implementation']}]")
     print(f"{info['compiler']}")
     print(f"{info['arch']}")
+    print(f"Rounds: {args.rounds} (median of {args.rounds} runs)")
     if args.quick:
         print("(--quick mode: skipping sustained & TTL benchmarks)")
 
@@ -647,7 +681,7 @@ def main() -> None:
     # 2. Single-thread throughput
     cache_sizes = [32, 64, 128, 256, 512, 1024]
     print(f"\n[2/{total_steps}] Single-thread throughput vs cache size ...")
-    tp_results = bench_throughput(contestants, cache_sizes)
+    tp_results = bench_throughput(contestants, cache_sizes, rounds=args.rounds)
     for sz in cache_sizes:
         parts = []
         for name, ops in tp_results[str(sz)].items():
@@ -660,7 +694,7 @@ def main() -> None:
     # 3. Multi-thread scaling
     thread_counts = [1, 2, 4, 8, 16, 32]
     print(f"\n[3/{total_steps}] Multi-thread scaling ...")
-    th_results = bench_threading(contestants, thread_counts)
+    th_results = bench_threading(contestants, thread_counts, rounds=args.rounds)
     for nt in thread_counts:
         parts = []
         for name, ops in th_results[str(nt)].items():
@@ -690,7 +724,7 @@ def main() -> None:
     step = 4 if args.quick else 6
     async_cache_sizes = [256]
     print(f"\n[{step}/{total_steps}] Async throughput ...")
-    async_results = bench_async_throughput(contestants, async_cache_sizes)
+    async_results = bench_async_throughput(contestants, async_cache_sizes, rounds=args.rounds)
     for sz_label, sz_data in async_results.items():
         parts = []
         for name, ops in sz_data.items():
@@ -700,7 +734,7 @@ def main() -> None:
     # 7. Shared backend single-process
     step = 5 if args.quick else 7
     print(f"\n[{step}/{total_steps}] Shared backend: memory vs shared ...")
-    shared_tp_results = bench_shared_throughput()
+    shared_tp_results = bench_shared_throughput(rounds=args.rounds)
     for backend, data in shared_tp_results.items():
         print(f"  {backend}: {data['ops_per_sec']:,.0f} ops/s  hit_rate={data['hit_rate']:.1%}")
 

@@ -93,7 +93,7 @@ from warp_cache import cache, Backend
 
 The memory backend keeps all cached data in the process's own heap. Keys are stored as live Python objects (no serialization), and lookups go through a single Rust `__call__` — hash, lookup, equality check, and return all happen in one FFI crossing with no copying.
 
-Thread safety is provided by a sharded `hashbrown::HashMap` with `parking_lot::RwLock` per shard — cache hits acquire only a cheap per-shard read lock (~8ns). The write lock is acquired only on cache misses for SIEVE eviction.
+Thread safety is provided by a sharded `hashbrown::HashMap` with GIL-conditional locking — under GIL-enabled Python, `GilCell` provides zero-cost access; under free-threaded Python, per-shard `parking_lot::RwLock` enables true parallel reads. The write lock is acquired only on cache misses for SIEVE eviction.
 
 ```python
 @cache(max_size=256)  # backend="memory" is the default

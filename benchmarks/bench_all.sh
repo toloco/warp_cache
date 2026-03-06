@@ -19,6 +19,7 @@ REPORT_GEN="$SCRIPT_DIR/_report_generator.py"
 # Defaults
 VERSIONS="3.12 3.13 3.13t"
 QUICK=""
+ROUNDS=""
 REPORT_ONLY=false
 CLEANUP=true
 
@@ -32,6 +33,7 @@ Usage: $(basename "$0") [OPTIONS]
 Options:
   --versions "V1 V2 ..."   Python versions to test (default: "$VERSIONS")
   --quick                   Skip sustained & TTL benchmarks
+  --rounds N                Rounds per burst benchmark, median (default: 3)
   --report-only             Only regenerate report from existing JSON results
   --keep-venvs              Keep temporary venvs for debugging
   -h, --help                Show this help
@@ -42,6 +44,7 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --versions) VERSIONS="$2"; shift 2 ;;
         --quick) QUICK="--quick"; shift ;;
+        --rounds) ROUNDS="--rounds $2"; shift 2 ;;
         --report-only) REPORT_ONLY=true; shift ;;
         --keep-venvs) CLEANUP=false; shift ;;
         -h|--help) usage; exit 0 ;;
@@ -68,6 +71,7 @@ echo "Project root: $PROJECT_ROOT"
 echo "Temp dir:     $TMPDIR_BASE"
 echo "Versions:     $VERSIONS"
 echo "Quick:        ${QUICK:-no}"
+echo "Rounds:       ${ROUNDS:-3 (default)}"
 echo ""
 
 completed_tags=""
@@ -128,7 +132,7 @@ for ver in $VERSIONS; do
     # 5. Run benchmarks
     echo ""
     echo "[5/5] Running benchmarks..."
-    "$VENV_PYTHON" "$RUNNER" --tag "$label" $QUICK
+    "$VENV_PYTHON" "$RUNNER" --tag "$label" $QUICK $ROUNDS
 
     if [[ -n "$completed_tags" ]]; then
         completed_tags="$completed_tags,$label"

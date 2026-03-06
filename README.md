@@ -1,21 +1,21 @@
 # warp_cache
 
 A thread-safe Python caching decorator backed by a Rust extension. Uses
-**SIEVE eviction** for scan-resistant, near-optimal hit rates with per-shard
-read locks. The entire cache lookup happens in a single Rust `__call__` — no Python
-wrapper overhead. **13-20M ops/s** single-threaded, **22x** faster than
-`cachetools`, with a cross-process shared memory backend reaching **9.2M ops/s**.
+**SIEVE eviction** for scan-resistant, near-optimal hit rates with zero-cost
+locking under the GIL. The entire cache lookup happens in a single Rust `__call__` — no Python
+wrapper overhead. **16-23M ops/s** single-threaded, **25x** faster than
+`cachetools`, with a cross-process shared memory backend reaching **9.7M ops/s**.
 
 ## Features
 
 - **Drop-in replacement for `functools.lru_cache`** — same decorator pattern and hashable-argument requirement, with added thread safety, TTL, and async support
 - **[SIEVE eviction](https://junchengyang.com/publication/nsdi24-SIEVE.pdf)** — a simple, scan-resistant algorithm with near-optimal hit rates and O(1) overhead per access
-- **Thread-safe** out of the box (sharded `RwLock` + `AtomicBool` for SIEVE visited bit)
+- **Thread-safe** out of the box (zero-cost `GilCell` under GIL, sharded `RwLock` under free-threaded Python)
 - **Async support**: works with `async def` functions — zero overhead on sync path
 - **Shared memory backend**: cross-process caching via mmap with fully lock-free reads
 - **TTL support**: optional time-to-live expiration
 - **Single FFI crossing**: entire cache lookup happens in Rust, no Python wrapper overhead
-- **13-20M ops/s** single-threaded, **17M+ ops/s** under concurrent load, **22x** faster than `cachetools`
+- **16-23M ops/s** single-threaded, **20M+ ops/s** under concurrent load, **25x** faster than `cachetools`
 
 ## Installation
 
@@ -58,17 +58,17 @@ Like `lru_cache`, all arguments must be hashable. See the [usage guide](docs/usa
 
 | Metric | warp_cache | cachetools | lru_cache |
 |---|---|---|---|
-| Single-threaded (cache=256) | 18.1M ops/s | 814K ops/s | 32.1M ops/s |
-| Multi-threaded (8T) | 17.9M ops/s | 774K ops/s (with Lock) | 12.3M ops/s (with Lock) |
-| Shared memory (single proc) | 9.2M ops/s (mmap) | No | No |
-| Shared memory (4 procs) | 7.5M ops/s total | No | No |
-| Thread-safe | Yes (sharded RwLock) | No (manual Lock) | No |
+| Single-threaded (cache=256) | 20.4M ops/s | 826K ops/s | 31.0M ops/s |
+| Multi-threaded (8T) | 20.4M ops/s | 793K ops/s (with Lock) | 12.6M ops/s (with Lock) |
+| Shared memory (single proc) | 9.7M ops/s (mmap) | No | No |
+| Shared memory (4 procs) | 8.1M ops/s total | No | No |
+| Thread-safe | Yes (GilCell / sharded RwLock) | No (manual Lock) | No |
 | Async support | Yes | No | No |
 | TTL support | Yes | Yes | No |
 | Eviction | SIEVE (scan-resistant) | LRU, LFU, FIFO, RR | LRU only |
 | Implementation | Rust (PyO3) | Pure Python | C (CPython) |
 
-`warp_cache` is the fastest *thread-safe* cache — **22x** faster than `cachetools` and **4.9x** faster than `moka_py`. Under multi-threaded load, it's **1.5x faster** than `lru_cache + Lock`. See [full benchmarks](docs/performance.md) for details.
+`warp_cache` is the fastest *thread-safe* cache — **25x** faster than `cachetools` and **5.3x** faster than `moka_py`. Under multi-threaded load, it's **1.6x faster** than `lru_cache + Lock`. See [full benchmarks](docs/performance.md) for details.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="benchmarks/results/comparison_mt_scaling_dark.svg">

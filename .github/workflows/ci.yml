@@ -56,21 +56,23 @@ jobs:
             python-version: "3.12"
           - os: ubuntu-latest
             python-version: "3.13"
+          - os: ubuntu-latest
+            python-version: "3.14"
           # Linux arm64 — boundary versions
           - os: ubuntu-24.04-arm
             python-version: "3.9"
           - os: ubuntu-24.04-arm
-            python-version: "3.13"
+            python-version: "3.14"
           # macOS arm64 — boundary versions
           - os: macos-latest
             python-version: "3.9"
           - os: macos-latest
-            python-version: "3.13"
+            python-version: "3.14"
           # Windows x86_64 — boundary versions
           - os: windows-latest
             python-version: "3.9"
           - os: windows-latest
-            python-version: "3.13"
+            python-version: "3.14"
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -81,6 +83,7 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: ${{ matrix.python-version }}
+          allow-prereleases: true
       - name: Install build and test deps
         run: uv pip install maturin pytest pytest-asyncio
       - name: Build extension

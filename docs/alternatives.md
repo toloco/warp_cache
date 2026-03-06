@@ -19,11 +19,11 @@ The Python caching ecosystem includes several notable libraries. Here's how they
 
 | Library | ops/s | vs warp_cache |
 |---|---:|---:|
-| lru_cache | 32.1M | 1.8x faster |
-| warp_cache | 18.1M | 1.0x |
-| moka_py | 3.7M | 4.9x slower |
-| cachebox | 1.5M | 12.1x slower |
-| cachetools | 814K | 22.2x slower |
+| lru_cache | 31.0M | 1.5x faster |
+| warp_cache | 20.4M | 1.0x |
+| moka_py | 3.9M | 5.3x slower |
+| cachebox | 1.5M | 13.6x slower |
+| cachetools | 826K | 24.7x slower |
 
 See [full benchmarks](../benchmarks/COMPARISON.md) for multi-thread, TTL, shared memory, and sustained throughput results.
 

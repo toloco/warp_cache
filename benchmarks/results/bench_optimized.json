@@ -1,0 +1,175 @@
+{
+  "python": {
+    "version": "3.13.2",
+    "implementation": "CPython",
+    "build": "main",
+    "compiler": "Clang 20.1.0 ",
+    "arch": "arm64",
+    "gil_disabled": false
+  },
+  "contestants": {
+    "warp_cache": {
+      "version": "0.1.0",
+      "available": true,
+      "thread_safe": true
+    },
+    "lru_cache": {
+      "version": "3.13.2",
+      "available": true,
+      "thread_safe": false
+    },
+    "cachetools": {
+      "version": "7.0.1",
+      "available": true,
+      "thread_safe": false
+    },
+    "cachebox": {
+      "version": "5.2.2",
+      "available": true,
+      "thread_safe": true
+    },
+    "moka_py": {
+      "version": "0.3.0",
+      "available": true,
+      "thread_safe": true
+    },
+    "zoocache": {
+      "version": "",
+      "available": true,
+      "thread_safe": true
+    }
+  },
+  "throughput": {
+    "32": {
+      "warp_cache": 13819631.460442344,
+      "lru_cache": 19858176.842272006,
+      "cachetools": 593001.3963504682,
+      "cachebox": 1072339.0945495719,
+      "moka_py": 2958616.2984204083
+    },
+    "64": {
+      "warp_cache": 17070914.414169848,
+      "lru_cache": 22886348.29186945,
+      "cachetools": 631029.1203989538,
+      "cachebox": 1132121.3974187898,
+      "moka_py": 3202715.8999012494
+    },
+    "128": {
+      "warp_cache": 19372024.74527764,
+      "lru_cache": 27649453.732439123,
+      "cachetools": 713543.9242987961,
+      "cachebox": 1270127.55214816,
+      "moka_py": 3480934.590479799
+    },
+    "256": {
+      "warp_cache": 19716410.877569325,
+      "lru_cache": 29390154.24730737,
+      "cachetools": 808434.1278922864,
+      "cachebox": 1475681.6805381973,
+      "moka_py": 3736699.7237622607
+    },
+    "512": {
+      "warp_cache": 21192614.43358791,
+      "lru_cache": 34506056.46961148,
+      "cachetools": 933776.9322076411,
+      "cachebox": 1766033.015706142,
+      "moka_py": 4173738.8900292255
+    },
+    "1024": {
+      "warp_cache": 23075151.605101902,
+      "lru_cache": 38528845.31512922,
+      "cachetools": 1157796.0197245493,
+      "cachebox": 2359290.44269309,
+      "moka_py": 4446066.361099501
+    },
+    "zoocache_unbounded": {
+      "zoocache": 1184532.3764901198
+    }
+  },
+  "threading": {
+    "1": {
+      "warp_cache": 17572376.325021476,
+      "lru_cache": 11302681.519766444,
+      "cachetools": 763375.7766535649,
+      "cachebox": 1499954.0715455357,
+      "moka_py": 3738667.1651478116
+    },
+    "2": {
+      "warp_cache": 20229438.175593168,
+      "lru_cache": 12481733.018274944,
+      "cachetools": 803225.483742783,
+      "cachebox": 1517376.8162150679,
+      "moka_py": 3670016.6249601063
+    },
+    "4": {
+      "warp_cache": 19770820.59220066,
+      "lru_cache": 12505405.505601289,
+      "cachetools": 812525.628757456,
+      "cachebox": 1525048.921221135,
+      "moka_py": 3739214.752872033
+    },
+    "8": {
+      "warp_cache": 20069404.200971823,
+      "lru_cache": 12087513.577976434,
+      "cachetools": 801156.337612627,
+      "cachebox": 1479588.1567904914,
+      "moka_py": 3604193.521583165
+    },
+    "16": {
+      "warp_cache": 19231538.566368107,
+      "lru_cache": 11758251.320902102,
+      "cachetools": 774902.7053531667,
+      "cachebox": 1471771.4320670897,
+      "moka_py": 3683280.864833729
+    },
+    "32": {
+      "warp_cache": 18515518.314627524,
+      "lru_cache": 11794597.500459978,
+      "cachetools": 788475.3787722631,
+      "cachebox": 1426369.8881426072,
+      "moka_py": 3779587.03200439
+    }
+  },
+  "async_throughput": {
+    "256": {
+      "warp_cache": 5576700.549470516,
+      "moka_py": 3158763.430456959
+    },
+    "sync_256": {
+      "warp_cache": 19702814.59257985,
+      "moka_py": 3791097.912654584
+    }
+  },
+  "shared_throughput": {
+    "memory": {
+      "ops_per_sec": 19922136.30474607,
+      "hit_rate": 0.71241
+    },
+    "shared": {
+      "ops_per_sec": 9348598.101741275,
+      "hit_rate": 0.72338
+    }
+  },
+  "multiprocess": {
+    "1": {
+      "total_ops_per_sec": 4664153.737242208,
+      "per_process_avg_ops_per_sec": 9053617.733725693,
+      "wall_time": 0.10720058303559199
+    },
+    "2": {
+      "total_ops_per_sec": 7554833.89622229,
+      "per_process_avg_ops_per_sec": 6585971.140168076,
+      "wall_time": 0.06618279195390642
+    },
+    "4": {
+      "total_ops_per_sec": 7492147.369089655,
+      "per_process_avg_ops_per_sec": 2687074.088014673,
+      "wall_time": 0.0667365409899503
+    },
+    "8": {
+      "total_ops_per_sec": 6109929.857151064,
+      "per_process_avg_ops_per_sec": 938979.3633366118,
+      "wall_time": 0.08183400001144037
+    }
+  }
+}

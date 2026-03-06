@@ -35,11 +35,11 @@ make test PYTHON=3.13   # Specific version
 ### Rust core (`src/`)
 
 - **`lib.rs`** — PyO3 module entry, exports `CachedFunction`, `SharedCachedFunction`, info types
-- **`store.rs`** — In-process backend: `CachedFunction` uses a sharded `hashbrown::HashMap` + `parking_lot::RwLock` per shard (read lock for cache hits, write lock for misses/eviction). The `__call__` method does the entire cache lookup in Rust (hash → shard select → read lock → lookup → equality check → SIEVE visited update → return) in a single FFI crossing
+- **`store.rs`** — In-process backend: `CachedFunction` uses sharded `hashbrown::HashMap` with passthrough hasher (avoids re-hashing Python's precomputed hash) + GIL-conditional locking (`GilCell` under GIL for zero-cost, `parking_lot::RwLock` under free-threaded Python). The `__call__` hot path uses `BorrowedArgs` to look up via borrowed pointer (no `CacheKey` allocation on hits), with `CacheKey` only materialized on cache miss for storage
 - **`serde.rs`** — Fast-path binary serialization for common primitives (None, bool, int, float, str, bytes, flat tuples); avoids pickle overhead for the shared backend
 - **`shared_store.rs`** — Cross-process backend: `SharedCachedFunction` holds `ShmCache` directly (no Mutex), with cached `max_key_size`/`max_value_size` fields and a pre-built `ahash::RandomState`. Serializes via serde.rs (with pickle fallback), stores in mmap'd shared memory
 - **`entry.rs`** — `CacheEntry` { value, created_at, visited }
-- **`key.rs`** — `CacheKey` wraps `Py<PyAny>` + precomputed hash; uses raw `ffi::PyObject_RichCompareBool` for equality (safe because called inside `#[pymethods]` where GIL is held)
+- **`key.rs`** — `CacheKey` wraps `Py<PyAny>` + precomputed hash; uses raw `ffi::PyObject_RichCompareBool` for equality. Also provides `BorrowedArgs` (zero-alloc borrowed key for hit-path lookups via hashbrown's `Equivalent` trait)
 - **`shm/`** — Shared memory infrastructure:
   - `mod.rs` — `ShmCache`: create/open, get/set with serialized bytes. Uses interior mutability (`&self` methods): reads are lock-free (seqlock), writes acquire seqlock internally. `next_unique_id` is `AtomicU64`
   - `layout.rs` — Header + SlotHeader structs, memory offsets
@@ -58,7 +58,9 @@ make test PYTHON=3.13   # Specific version
 - **Single FFI crossing**: entire cache lookup happens in Rust `__call__`, no Python wrapper overhead
 - **Release profile**: fat LTO + `codegen-units=1` for cross-crate inlining of PyO3 wrappers
 - **SIEVE eviction**: unified across both backends. On hit, sets `visited=1` (single-word store). On evict, hand scans for unvisited entry. Lock-free reads on both backends
-- **Thread safety**: sharded `hashbrown::HashMap` + `parking_lot::RwLock` per shard (read lock for hits, write lock for misses) for in-process backend; seqlock (optimistic reads + TTAS spinlock) for shared backend — no Mutex, `ShmCache` uses `&self` methods with interior mutability. Cache hits only acquire a cheap per-shard read lock (memory) or are fully lock-free (shared). Enables true parallel reads across shards under free-threaded Python (3.13t+)
+- **Thread safety**: GIL-conditional locking — `GilCell` (zero-cost `UnsafeCell` wrapper) under GIL-enabled Python, `parking_lot::RwLock` under free-threaded Python (`#[cfg(Py_GIL_DISABLED)]`). Shared backend uses seqlock (optimistic reads + TTAS spinlock) — no Mutex. Under free-threaded Python, per-shard `RwLock` enables true parallel reads across cores
+- **Borrowed key lookup**: hit path uses `BorrowedArgs` (raw pointer + precomputed hash) via hashbrown's `Equivalent` trait — no `CacheKey` allocation, no refcount churn on hits
+- **Passthrough hasher**: `PassthroughHasher` feeds Python's precomputed hash directly to hashbrown, avoiding foldhash re-hashing (~1-2ns saved per lookup). Shard count is power-of-2 for bitmask indexing
 
 ## Critical Invariants
 

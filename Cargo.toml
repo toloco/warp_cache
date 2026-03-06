@@ -17,6 +17,9 @@ memmap2 = "0.9"
 libc = "0.2"
 ahash = "0.8"
 
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(Py_GIL_DISABLED)'] }
+
 [profile.release]
 lto = "fat"
 codegen-units = 1

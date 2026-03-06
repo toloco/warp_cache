@@ -9,16 +9,16 @@ The entire cache lookup happens in a single Rust `__call__`:
 ```
 Python: fn(42)
   └─ tp_call (PyO3) ─────────────────────────────── one FFI crossing
-       ├─ hash(args)           via ffi::PyObject_Hash
-       ├─ shard select         hash % n_shards
-       ├─ RwLock::read()       per-shard read lock (~8ns)
-       ├─ HashMap lookup       hashbrown
-       ├─ equality check       via ffi::PyObject_RichCompareBool
+       ├─ hash(args)           via ffi::PyObject_Hash (raw FFI, no PyO3 wrapper)
+       ├─ shard select         hash & shard_mask (power-of-2 bitmask)
+       ├─ GilCell::read()      zero-cost under GIL (UnsafeCell)
+       ├─ HashMap lookup       hashbrown + passthrough hasher (no re-hash)
+       ├─ equality check       via ffi::PyObject_RichCompareBool (borrowed pointer)
        ├─ SIEVE visited=1      AtomicBool store, lock-free
        └─ return cached value
 ```
 
-No Python wrapper function. No serialization. No intermediate key object.
+No Python wrapper function. No serialization. No key allocation on hits — the lookup uses `BorrowedArgs` (a raw pointer + precomputed hash) via hashbrown's `Equivalent` trait. A `CacheKey` is only materialized on cache miss when the entry needs to be stored.
 
 ## SIEVE eviction
 
@@ -34,22 +34,22 @@ This is simpler than LRU (no list reordering on every hit) and achieves higher h
 
 | Cache Size | warp_cache | lru_cache | cachetools | cachebox | moka_py | wc/ct | wc/lru |
 |---:|---:|---:|---:|---:|---:|---:|---:|
-| 32 | 13.0M | 19.6M | 594K | 1.1M | 3.1M | 21.9x | 0.66x |
-| 64 | 15.0M | 22.3M | 628K | 1.2M | 3.3M | 23.9x | 0.67x |
-| 128 | 16.6M | 25.7M | 711K | 1.3M | 3.4M | 23.3x | 0.65x |
-| 256 | 18.1M | 32.1M | 814K | 1.5M | 3.7M | 22.2x | 0.56x |
-| 512 | 18.6M | 34.5M | 948K | 1.8M | 4.1M | 19.6x | 0.54x |
-| 1024 | 19.9M | 39.5M | 1.1M | 2.4M | 4.4M | 17.6x | 0.50x |
+| 32 | 16.5M | 21.6M | 611K | 1.1M | 3.2M | 27.0x | 0.76x |
+| 64 | 17.3M | 23.0M | 650K | 1.2M | 3.4M | 26.6x | 0.75x |
+| 128 | 19.1M | 26.4M | 710K | 1.3M | 3.6M | 26.9x | 0.72x |
+| 256 | 20.4M | 31.0M | 826K | 1.5M | 3.9M | 24.7x | 0.66x |
+| 512 | 21.8M | 36.0M | 946K | 1.8M | 4.2M | 23.0x | 0.61x |
+| 1024 | 22.9M | 40.1M | 1.2M | 2.4M | 4.6M | 19.1x | 0.57x |
 
 ## TTL throughput (cache size = 256)
 
 | TTL | warp_cache | cachetools | moka_py | wc/ct |
 |---|---:|---:|---:|---:|
-| 1ms | 6.7M | 584K | 2.5M | 11.5x |
-| 10ms | 6.9M | 528K | 2.7M | 13.1x |
-| 100ms | 6.9M | 529K | 2.7M | 13.0x |
-| 1s | 7.0M | 526K | 2.6M | 13.3x |
-| None | 6.9M | 532K | 2.7M | 13.0x |
+| 1ms | 7.3M | 604K | 2.6M | 12.1x |
+| 10ms | 7.3M | 527K | 2.7M | 13.9x |
+| 100ms | 7.4M | 534K | 2.7M | 13.8x |
+| 1s | 7.2M | 523K | 2.7M | 13.8x |
+| None | 7.3M | 523K | 2.7M | 13.9x |
 
 TTL adds minimal overhead — the expiry timestamp is checked during the normal read path, with no background eviction thread.
 
@@ -57,14 +57,14 @@ TTL adds minimal overhead — the expiry timestamp is checked during the normal 
 
 | Threads | warp_cache | lru_cache + Lock | cachetools + Lock | cachebox | moka_py | wc/lru |
 |---:|---:|---:|---:|---:|---:|---:|
-| 1 | 18.3M | 11.9M | 778K | 1.5M | 3.6M | 1.54x |
-| 2 | 17.3M | 12.2M | 793K | 1.5M | 3.5M | 1.42x |
-| 4 | 18.0M | 12.6M | 803K | 1.5M | 3.6M | 1.43x |
-| 8 | 17.9M | 12.3M | 774K | 1.5M | 3.6M | 1.46x |
-| 16 | 17.2M | 11.6M | 785K | 1.5M | 3.6M | 1.48x |
-| 32 | 16.8M | 11.6M | 779K | 1.4M | 3.6M | 1.45x |
+| 1 | 20.7M | 12.6M | 767K | 1.5M | 3.7M | 1.64x |
+| 2 | 20.7M | 12.3M | 800K | 1.6M | 3.8M | 1.68x |
+| 4 | 20.8M | 12.5M | 788K | 1.5M | 3.7M | 1.66x |
+| 8 | 20.4M | 12.6M | 793K | 1.5M | 3.7M | 1.62x |
+| 16 | 19.5M | 11.9M | 795K | 1.5M | 3.7M | 1.64x |
+| 32 | 17.8M | 11.5M | 784K | 1.4M | 3.8M | 1.55x |
 
-`warp_cache` maintains ~17-18M ops/s regardless of thread count — stable scaling with no contention, and **1.4-1.5x faster** than `lru_cache + Lock` even under the GIL. The sharded `RwLock` architecture means cache hits only acquire a cheap per-shard read lock (~8ns), while `lru_cache + Lock` must acquire a global `threading.Lock()` on every access. Under free-threaded Python (no GIL), `warp_cache`'s per-shard locking enables true parallel reads across shards while `lru_cache` must acquire a real lock.
+`warp_cache` maintains ~18-21M ops/s regardless of thread count — stable scaling with no contention, and **1.6-1.7x faster** than `lru_cache + Lock` under the GIL. Under GIL-enabled Python, `GilCell` provides zero-cost locking (the GIL itself serializes access), while `lru_cache + Lock` must acquire a global `threading.Lock()` on every access. Under free-threaded Python (no GIL), `warp_cache` automatically switches to per-shard `RwLock` for true parallel reads across cores.
 
 ## Shared memory backend
 
@@ -74,21 +74,21 @@ The shared memory backend uses SIEVE with **fully lock-free reads** — no Mutex
 
 | Backend | Throughput | Hit Rate | Notes |
 |---|---:|---:|---|
-| Memory (in-process) | 17.2M ops/s | 71.2% | Sharded hashbrown HashMap + RwLock + SIEVE |
-| Shared (mmap, single process) | 9.2M ops/s | 72.3% | Seqlock + lock-free reads, no Mutex |
+| Memory (in-process) | 20.0M ops/s | 71.2% | Sharded hashbrown HashMap + GilCell + passthrough hasher + SIEVE |
+| Shared (mmap, single process) | 9.7M ops/s | 73.0% | Seqlock + lock-free reads, no Mutex |
 
-The shared backend reaches **54% of in-process speed**. The gap is dominated by serialization (serde fast-path for primitives, pickle fallback), ahash of key bytes, seqlock overhead, and mmap copy — all irreducible cross-process costs.
+The shared backend reaches **49% of in-process speed**. The gap is dominated by serialization (serde fast-path for primitives, pickle fallback), ahash of key bytes, seqlock overhead, and mmap copy — all irreducible cross-process costs.
 
 ### Multi-process scaling
 
 | Processes | Total Throughput | Per-Process Avg |
 |---:|---:|---:|
-| 1 | 4.8M ops/s | 4.8M ops/s |
-| 2 | 7.2M ops/s | 3.6M ops/s |
-| 4 | 7.5M ops/s | 1.9M ops/s |
-| 8 | 6.6M ops/s | 0.8M ops/s |
+| 1 | 5.0M ops/s | 5.0M ops/s |
+| 2 | 7.8M ops/s | 3.4M ops/s |
+| 4 | 8.1M ops/s | 2.0M ops/s |
+| 8 | 6.5M ops/s | 1.0M ops/s |
 
-Lock-free reads enable excellent multi-process scaling. Total throughput peaks at 4 processes (7.5M ops/s) — 1.6x the single-process rate. Even with 8 processes contending on the same mmap'd file, throughput stays at 6.6M ops/s.
+Lock-free reads enable excellent multi-process scaling. Total throughput peaks at 4 processes (8.1M ops/s) — 1.6x the single-process rate. Even with 8 processes contending on the same mmap'd file, throughput stays at 6.5M ops/s.
 
 For comparison, the previous LRU-based shared backend achieved only 3.1M ops/s at 4 processes and 1.9M ops/s at 8 processes — SIEVE delivers **2.5x and 3.4x improvements** respectively, thanks to eliminating write locks on the read path.
 
@@ -153,36 +153,34 @@ Three phases: Zipf over keys 0–999, then keys 1000–1999 (completely new set)
 
 ### Memory backend vs lru_cache
 
-At cache size 256, a cache hit takes ~55ns vs `lru_cache`'s ~31ns:
+At cache size 256, a cache hit takes ~49ns vs `lru_cache`'s ~32ns:
 
 | Operation | lru_cache (C) | warp_cache (Rust) | Delta |
 |---|---:|---:|---:|
 | Call dispatch (`tp_call`) | ~5ns | ~10ns | +5ns |
 | Hash args (`PyObject_Hash`) | ~15ns | ~15ns | 0 |
-| Shard select + RwLock::read | ~0ns | ~8ns | +8ns |
+| Shard select + lock | ~0ns | ~0ns | 0 |
 | Table lookup + key equality | ~5ns | ~5ns | 0 |
 | SIEVE visited store | ~0ns | ~1ns | +1ns |
 | Refcount management | ~2ns | ~5ns | +3ns |
 | Return value | ~2ns | ~2ns | 0 |
-| **Total** | **~31ns** | **~55ns** | **+24ns** |
+| **Total** | **~34ns** | **~51ns** | **+17ns** |
 
-Two categories:
+The remaining gap is dominated by **PyO3 call dispatch (~5ns)** — PyO3's `tp_call` shim extracts GIL tokens, validates and converts argument pointers. `lru_cache` receives raw `PyObject*` directly. This is inherent to using a safe FFI layer.
 
-1. **Structural: PyO3 call dispatch (~5ns)** — PyO3's `tp_call` shim extracts
-   GIL tokens, validates and converts argument pointers. `lru_cache` receives raw
-   `PyObject*` directly. Inherent to using a safe FFI layer.
+Three optimizations eliminated previously avoidable overhead:
 
-2. **Structural: per-shard RwLock (~8ns)** — `parking_lot::RwLock::read()` is
-   cheap (~8ns uncontended) and enables true parallel reads across shards.
-   `lru_cache` uses a simple C hash table with no concurrency support.
+1. **GIL-conditional lock elision** — Under GIL-enabled Python, `GilCell` (a zero-cost `UnsafeCell` wrapper) replaces `parking_lot::RwLock`, eliminating ~8ns per hit. Under free-threaded Python (`#[cfg(Py_GIL_DISABLED)]`), real `RwLock` is used automatically.
 
-Note: cache hits acquire only a **per-shard read lock** — the SIEVE visited bit
-uses `AtomicBool::store(Relaxed)` which requires no lock upgrade. The write lock
-is only acquired on cache misses for SIEVE eviction.
+2. **Borrowed key lookup** — The hit path uses `BorrowedArgs` (raw pointer + precomputed hash) via hashbrown's `Equivalent` trait. No `CacheKey` is allocated, no `args.clone()`, no refcount churn. A `CacheKey` is only materialized on cache miss.
+
+3. **Passthrough hasher** — `PassthroughHasher` feeds Python's precomputed hash directly to hashbrown, skipping foldhash re-hashing (~1-2ns saved).
+
+Note: cache hits acquire only a **zero-cost GilCell read** (under GIL) or a **per-shard read lock** (under free-threading). The SIEVE visited bit uses `AtomicBool::store(Relaxed)` which requires no lock upgrade. The write lock is only acquired on cache misses for SIEVE eviction.
 
 ### Shared backend vs memory backend
 
-The shared backend hit path takes ~109ns vs the memory backend's ~55ns. The ~54ns delta is irreducible cross-process overhead:
+The shared backend hit path takes ~103ns vs the memory backend's ~49ns. The ~54ns delta is irreducible cross-process overhead:
 
 | Operation | Cost | Notes |
 |---|---:|---|
@@ -200,7 +198,7 @@ No Mutex or RwLock on the shared backend's read path — `ShmCache` uses interio
 
 Under free-threaded Python (no GIL), `warp_cache`'s architecture pays off:
 
-- **warp_cache improves**: sharded `RwLock` enables true parallel reads across cores
+- **warp_cache adapts automatically**: `#[cfg(Py_GIL_DISABLED)]` switches from zero-cost `GilCell` to real per-shard `RwLock`, enabling true parallel reads across cores
 - **lru_cache gets worse**: needs a real lock without the GIL's implicit protection
 - **Trade-off**: atomic refcounting adds ~2-5ns to single-threaded cost
 
@@ -219,7 +217,8 @@ runs all benchmarks.
 | 5. SIEVE eviction | Unified eviction for both backends, lock-free reads | +12% hit rate | — |
 | 6. Sharded RwLock (hashbrown) | Per-shard read locks, true parallel reads across shards | ~18M ops/s | 0.56x |
 | 7. Shared backend: remove Mutex | `ShmCache` interior mutability, cached hash state + size limits | cleaner arch | — |
+| 8. Passthrough hasher + borrowed keys + GilCell | Zero re-hash, zero-alloc hit path, zero-cost lock under GIL | ~20M ops/s | 0.66x |
 
 ---
 
-*Benchmarks: 100K ops per config, Zipf-distributed keys (2000 unique), `time.perf_counter()`. Python 3.13.2, cachetools 7.0.1, moka_py 0.3.0, cachebox 5.2.2. Source: `benchmarks/`*
+*Benchmarks: 100K ops per config, median of 3 rounds, Zipf-distributed keys (2000 unique), `time.perf_counter()`. Python 3.13.2, cachetools 7.0.1, moka_py 0.3.0, cachebox 5.2.2. Source: `benchmarks/`*

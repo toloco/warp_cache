@@ -1,224 +1,242 @@
-# warp_cache vs lru_cache vs moka_py
+# warp_cache vs lru_cache vs moka_py vs cachebox
 
-A deep comparison of three Python caching libraries: **warp_cache** (Rust/PyO3), **lru_cache** (CPython builtin), and **moka_py** (Rust/PyO3, port of Java's Caffeine).
+A head-to-head comparison of four Python caching libraries, all benchmarked on the same machine, same workload, same measurement methodology.
 
-*Benchmarks: Apple M-series (arm64), Zipf-distributed keys (2000 unique), 100K ops per config, `time.perf_counter()`.*
+*Environment: Python 3.13.2, Apple M-series (arm64), Zipf-distributed keys (2000 unique), 100K ops per config, `time.perf_counter()`.*
 
 ---
 
 ## TL;DR
 
-| Scenario | warp_cache | lru_cache | moka_py |
-|---|---:|---:|---:|
-| Single-thread (3.13, cache=256) | 16.3M ops/s | 29.8M ops/s | 3.9M ops/s |
-| Single-thread (3.13t, no GIL) | 14.0M ops/s | 21.5M ops/s | 3.3M ops/s |
-| Multi-thread 8T (3.13, GIL) | 16.4M ops/s | 12.6M ops/s (+Lock) | 3.8M ops/s |
-| Multi-thread 8T (3.13t, no GIL) | 12.7M ops/s | 9.0M ops/s (+Lock) | 3.0M ops/s |
-| Shared memory (3.13, single proc) | 7.8M ops/s | N/A | N/A |
-| Thread-safe (builtin) | Yes | No | Yes |
-| Async support | Yes | No | No |
-| Cross-process shared memory | Yes | No | No |
-| Eviction strategies | LRU/MRU/FIFO/LFU | LRU | LRU/LFU/FIFO |
-| TTL support | Yes | No | Yes |
+| | warp_cache | lru_cache | moka_py | cachebox |
+|---|---:|---:|---:|---:|
+| **Single-thread (cache=256)** | **18.1M ops/s** | **32.1M ops/s** | 3.7M ops/s | 1.5M ops/s |
+| **Multi-thread 8T** | **17.9M ops/s** | 12.3M ops/s (+Lock) | 3.6M ops/s | 1.5M ops/s |
+| **Sustained (10s)** | **7.9M ops/s** | **10.2M ops/s** | 2.8M ops/s | 1.3M ops/s |
+| Shared memory | 9.2M ops/s | N/A | N/A | N/A |
+| Implementation | Rust (PyO3) | C (CPython) | Rust (PyO3, moka) | Rust (PyO3) |
+| Thread-safe (builtin) | Yes | No | Yes | Yes |
+| Eviction | SIEVE | LRU | TinyLFU / LRU | LRU / LFU / FIFO / RR |
+| TTL support | Yes | No | Yes (+ TTI) | Yes (TTLCache, VTTLCache) |
 
-**Bottom line:** `lru_cache` is fastest single-threaded (it's C code inside CPython with zero overhead). `warp_cache` is the fastest *thread-safe* cache, 1.3x faster than `lru_cache+Lock` under the GIL and 1.4x faster without it. `moka_py` is 4-5x slower than `warp_cache` despite also being Rust. The shared memory backend reaches ~7.8M ops/s via seqlock-based optimistic reads — only ~2x slower than the in-process backend.
+**Bottom line:** `lru_cache` is fastest single-threaded — it's C code inside CPython with zero lock overhead. Among thread-safe caches, `warp_cache` leads at **18.1M ops/s** — 4.9x faster than `moka_py` and 12x faster than `cachebox`. Under multi-threaded load, `warp_cache` is **1.5x faster** than `lru_cache + Lock`. All three Rust libraries provide builtin thread safety, but with very different performance characteristics. Only `warp_cache` offers cross-process shared memory.
 
 ---
 
-## The GIL Question
+## The libraries
 
-### What the GIL means for caching
-
-Python's Global Interpreter Lock (GIL) serializes all Python bytecode execution. This has two consequences for caches:
-
-1. **`lru_cache` doesn't need a lock.** The GIL guarantees that only one thread touches the cache at a time. This is why it's so fast — zero synchronization overhead.
-
-2. **Thread-safe caches pay a tax.** Any cache that uses its own lock (like `warp_cache`'s `parking_lot::RwLock`) pays ~8ns per operation even though the GIL already serializes access. This is the price of correctness under free-threaded Python.
-
-### Free-threaded Python 3.13t
-
-Python 3.13 introduced an experimental free-threaded mode (`python3.13t`) that disables the GIL entirely. This changes the equation:
-
-- **`lru_cache` becomes unsafe.** Without the GIL, concurrent reads/writes corrupt internal state. You *must* wrap it in `threading.Lock()`, adding contention overhead.
-- **`warp_cache` already has the lock.** Its `RwLock` enables true parallel reads across cores — multiple threads can read the cache simultaneously with no contention.
-- **Everything gets ~15-20% slower.** Atomic reference counting (replacing the GIL's implicit refcount protection) adds overhead to all Python objects. This affects every library equally.
-
-### warp_cache's read-lock architecture
-
-The key insight: most cache operations are **reads** (cache hits). `warp_cache` uses a read-write lock where cache hits only acquire a *read lock* — multiple threads read simultaneously. Only cache misses require a write lock.
-
-This means under real workloads with high hit rates (typical for caches), contention is near-zero even with many threads.
+| Library | What it is | PyPI |
+|---|---|---|
+| **[warp_cache](https://github.com/toloco/warp_cache)** | Rust/PyO3 caching decorator with SIEVE eviction, shared memory backend, and single-FFI-crossing architecture | `pip install warp_cache` |
+| **[lru_cache](https://docs.python.org/3/library/functools.html#functools.lru_cache)** | CPython builtin LRU cache decorator, implemented in C. Zero dependencies, zero overhead, but not thread-safe | (builtin) |
+| **[moka-py](https://github.com/deliro/moka-py)** | Rust port of Java's Caffeine cache with TinyLFU admission. Offers both decorator and manual cache object APIs | `pip install moka-py` |
+| **[cachebox](https://github.com/awolverp/cachebox)** | Rust/PyO3 with 7 cache types (LRU, LFU, FIFO, RR, TTL, VTTL, plain). Dictionary-like API with decorator support | `pip install cachebox` |
 
 ---
 
-## Single-Thread Performance
+## Feature matrix
 
-![Single-Thread Throughput](results/comparison_st_throughput.png)
+| Feature | warp_cache | lru_cache | moka_py | cachebox |
+|---|:---:|:---:|:---:|:---:|
+| Implementation | Rust (PyO3) | C (CPython) | Rust (PyO3) | Rust (PyO3) |
+| Thread-safe (builtin) | Yes (lock-free reads) | No | Yes | Yes |
+| Async support | Yes (auto-detect) | No | Yes (`@cached`) | Yes (`@cached`) |
+| Cross-process shared memory | Yes (mmap) | No | No | No |
+| TTL support | Yes | No | Yes | Yes |
+| TTI (time-to-idle) | No | No | Yes | No |
+| Per-entry TTL | No | No | Yes | Yes (VTTLCache) |
+| Eviction strategies | SIEVE | LRU | TinyLFU, LRU | LRU, LFU, FIFO, RR |
+| Stampede prevention | No | No | Yes (`get_with`) | Yes |
+| Eviction listener | No | No | Yes | No |
+| Cache statistics | Yes (hits/misses) | Yes (hits/misses) | No | Yes (hits/misses + memory) |
+| `cache_clear()` | Yes | Yes | Yes | Yes |
+| Manual cache object | No (decorator only) | No (decorator only) | Yes (`Moka(...)`) | Yes (dict-like API) |
+| Copy-on-return | No | No | No | Yes (configurable) |
+| Decorator API | `@cache()` | `@lru_cache()` | `@cached()` | `@cached(Cache())` |
+| Free-threaded Python ready | Yes | No (needs Lock) | Yes | Yes |
+| Python versions | 3.10+ | Any | 3.9+ | 3.9+ |
 
-### Why lru_cache wins single-threaded
+---
 
-`lru_cache` is unbeatable in single-threaded scenarios because it pays almost nothing:
+## Single-thread performance
 
-| Operation | lru_cache (C) | warp_cache (Rust) | Delta |
-|---|---:|---:|---:|
-| Call dispatch (`tp_call`) | ~5ns | ~10ns | +5ns |
-| Hash args (`PyObject_Hash`) | ~15ns | ~15ns | 0 |
-| Table lookup + key equality | ~10ns | ~12ns | +2ns |
-| LRU reorder (linked list) | ~5ns | ~8ns | +3ns |
-| **Lock acquire + release** | **0ns** | **~8ns** | **+8ns** |
-| Refcount management | ~2ns | ~5ns | +3ns |
-| Return value | ~2ns | ~2ns | 0 |
-| **Total** | **~39ns** | **~60ns** | **+21ns (~34ns measured)** |
+Cache hit throughput across different cache sizes, Zipf-distributed keys:
 
-The three categories of overhead:
+| Cache Size | warp_cache | lru_cache | moka_py | cachebox |
+|---:|---:|---:|---:|---:|
+| 32 | 13.0M | 19.6M | 3.1M | 1.1M |
+| 64 | 15.0M | 22.3M | 3.3M | 1.2M |
+| 128 | 16.6M | 25.7M | 3.4M | 1.3M |
+| 256 | 18.1M | 32.1M | 3.7M | 1.5M |
+| 512 | 18.6M | 34.5M | 4.1M | 1.8M |
+| 1024 | 19.9M | 39.5M | 4.4M | 2.4M |
 
-1. **Irreducible: Thread safety lock (~8ns)** — `lru_cache` pays nothing because the GIL provides implicit safety. `warp_cache` pays ~8ns for `parking_lot::RwLock`. Cannot be eliminated without removing thread safety.
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="results/comparison_st_throughput_dark.svg">
+  <img src="results/comparison_st_throughput_light.svg" alt="Single-Thread Throughput">
+</picture>
 
-2. **Structural: PyO3 call dispatch (~5ns)** — PyO3's `tp_call` shim extracts GIL tokens, validates and converts argument pointers. `lru_cache` receives raw `PyObject*` directly. Inherent to using a safe FFI layer.
+### Why is lru_cache fastest?
 
-3. **Marginal: Reference counting (~3ns)** — `lru_cache` uses the args tuple pointer as-is. `warp_cache` does `Py_INCREF` to own it in `CacheKey`, then `Py_DECREF` on drop. Cost of Rust's ownership model.
+`lru_cache` is C code inside CPython. It pays no thread-safety overhead (the GIL provides implicit safety), no PyO3 dispatch overhead, and no reference counting overhead. It simply cannot be beaten by an extension module under the GIL.
 
-### Why warp_cache beats moka_py 4-5x
+### Why is warp_cache 4.9x faster than moka_py?
 
-Both are Rust + PyO3, yet `warp_cache` is **4.2x faster** (16.3M vs 3.9M ops/s on Python 3.13). The differences:
+Both are Rust + PyO3, yet `warp_cache` is significantly faster. The differences:
 
-1. **Single FFI crossing.** `warp_cache` does the entire lookup — hash, find, equality check, LRU reorder, return — in one Rust `__call__`. `moka_py` crosses the FFI boundary multiple times.
+1. **Single FFI crossing.** `warp_cache` does the entire lookup — hash, find, equality check, SIEVE visited update, return — in one Rust `__call__`. `moka_py` crosses the FFI boundary multiple times.
 
-2. **Static dispatch.** `warp_cache` uses an `enum` over strategy types (`StrategyEnum`), allowing the compiler to inline and devirtualize. No `Box<dyn>` indirection.
+2. **SIEVE eviction.** Cache hits just set a `visited` bit (a single-word store). No linked-list reordering, no frequency counter updates on the hot path.
 
 3. **Precomputed hash + raw C equality.** `CacheKey` stores the Python hash once and uses `ffi::PyObject_RichCompareBool` directly — the same raw C call that `lru_cache` uses.
 
-4. **No serialization.** The in-memory backend stores `Py<PyAny>` directly. No pickle, no copies.
+4. **No serialization.** The in-memory backend stores `Py<PyAny>` directly. No copies.
+
+### Why is cachebox slower than moka_py?
+
+Despite both being Rust + PyO3, cachebox's `@cached` decorator adds more Python-level overhead. The LRU linked-list reordering on every hit is also more expensive than moka_py's deferred frequency tracking. cachebox's default `copy_level=1` (copy dict/list/set return values) adds additional overhead that the benchmarks measure.
 
 ---
 
-## Multi-Thread Performance
+## Multi-thread performance
 
-![Multi-Thread Scaling](results/comparison_mt_scaling.png)
+All thread-safe libraries used directly. `lru_cache` wrapped in `threading.Lock()`.
 
-![Scaling Efficiency](results/comparison_scaling_ratio.png)
+| Threads | warp_cache | lru_cache + Lock | moka_py | cachebox |
+|---:|---:|---:|---:|---:|
+| 1 | 18.3M | 11.9M | 3.6M | 1.5M |
+| 2 | 17.3M | 12.2M | 3.5M | 1.5M |
+| 4 | 18.0M | 12.6M | 3.6M | 1.5M |
+| 8 | 17.9M | 12.3M | 3.6M | 1.5M |
+| 16 | 17.2M | 11.6M | 3.6M | 1.5M |
+| 32 | 16.8M | 11.6M | 3.6M | 1.4M |
+| 64 | 12.8M | 9.8M | 3.9M | 1.5M |
+| 128 | 12.1M | 9.5M | 3.8M | 1.4M |
 
-### GIL mode (Python 3.13)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="results/comparison_mt_scaling_dark.svg">
+  <img src="results/comparison_mt_scaling_light.svg" alt="Multi-Thread Scaling">
+</picture>
 
-Under the GIL, `warp_cache` maintains ~16M ops/s regardless of thread count. This is remarkable — adding threads doesn't slow it down because:
+Under the GIL, `warp_cache` is **1.4-1.5x faster** than `lru_cache + Lock` across all thread counts. The sharded `RwLock` architecture means cache hits only acquire a cheap per-shard read lock (~8ns), while `lru_cache + Lock` must acquire a global `threading.Lock()` on every access.
 
-- The `RwLock` is uncontended (the GIL serializes access anyway)
-- Atomic hit/miss counters use `Ordering::Relaxed` — no memory barriers
-- The deferred access log batches LRU updates, reducing write-lock contention
-
-Meanwhile, `lru_cache + Lock` drops to ~12.6M ops/s. The `threading.Lock()` wrapper adds Python-level function call overhead on every access.
-
-### No-GIL mode (Python 3.13t)
-
-Without the GIL, the story is similar but shifted down ~15-20% across the board due to atomic reference counting overhead:
-
-- **warp_cache: ~12.7M ops/s** — stable across thread counts
-- **lru_cache + Lock: ~9.0M ops/s** — degrades slightly with contention
-- **moka_py: ~3.0M ops/s** — stable but slow
-
-`warp_cache` leads by **1.4x** over `lru_cache+Lock` — its RwLock architecture specifically benefits here because multiple readers can proceed in parallel without the GIL's serialization.
-
-### Why warp_cache doesn't scale *up* with threads
-
-Under the GIL, adding threads can't increase throughput because only one thread runs at a time. The GIL turns parallelism into concurrency.
-
-Under no-GIL, `warp_cache` could theoretically scale reads across cores. In practice, the benchmark workload is CPU-bound with very short operations (~70ns each), so thread scheduling overhead dominates any parallelism gains. For I/O-bound workloads with expensive cache misses, the read-lock architecture would show clear scaling benefits.
+Under **free-threaded Python** (no GIL), `warp_cache`'s sharded `RwLock` enables true parallel reads across cores, while `lru_cache` must still acquire a real lock on every access.
 
 ---
 
-## Why warp_cache Is Fast — Architecture Deep Dive
+## Sustained throughput
 
-### 1. Single FFI crossing
+10-second sustained benchmark (cache size = 256, Zipf-distributed keys):
 
-The entire cache lookup happens in Rust's `__call__` method. Python calls `cached_fn(42)`, which enters Rust once and returns the cached value. No Python wrapper function, no intermediate objects.
+| Library | ops/s | vs warp_cache |
+|---|---:|---:|
+| lru_cache | 10.2M | 1.3x faster |
+| **warp_cache** | **7.9M** | **1.0x** |
+| moka_py | 2.8M | 2.8x slower |
+| cachebox | 1.3M | 6.1x slower |
+
+Sustained throughput is lower than burst throughput because it includes GC pauses, CPU frequency scaling, and cache-line effects over time. The relative ordering remains consistent.
+
+---
+
+## TTL throughput
+
+Cache size = 256, various TTL values (10-second sustained per configuration):
+
+| TTL | warp_cache | moka_py | ratio |
+|---|---:|---:|---:|
+| 1ms | 6.7M | 2.5M | 2.7x |
+| 10ms | 6.9M | 2.7M | 2.6x |
+| 100ms | 6.9M | 2.7M | 2.6x |
+| 1s | 7.0M | 2.6M | 2.7x |
+| None | 6.9M | 2.7M | 2.6x |
+
+TTL adds minimal overhead to `warp_cache` — the expiry timestamp is checked inline during the read path. `cachebox` is excluded from TTL benchmarks because its `TTLCache` uses FIFO eviction (not LRU-comparable). `lru_cache` does not support TTL.
+
+---
+
+## Async throughput
+
+Cache hit throughput for `async def` cached functions (cache size = 256, Zipf-distributed keys):
+
+| Mode | warp_cache | moka_py | ratio |
+|---|---:|---:|---:|
+| Sync | 16.3M | 3.7M | 4.4x |
+| Async | 5.6M | 3.2M | 1.7x |
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="results/comparison_async_dark.svg">
+  <img src="results/comparison_async_light.svg" alt="Sync vs Async Throughput">
+</picture>
+
+Async cache hits are slower than sync because every call creates and resolves a Python coroutine object, even though the actual cache lookup is synchronous Rust code. `warp_cache` async hits are still **1.7x faster** than `moka_py` async. The async overhead is dominated by CPython's coroutine machinery, not the cache itself — `warp_cache`'s `AsyncCachedFunction` calls the Rust `get()` synchronously and only `await`s the original function on cache miss.
+
+---
+
+## Cross-process shared memory
+
+`warp_cache` is the only library in this comparison that supports cross-process caching via mmap'd shared memory.
+
+| Backend | Throughput | Hit Rate |
+|---|---:|---:|
+| Memory (in-process) | 17.2M ops/s | 71.2% |
+| Shared (mmap, single process) | 9.2M ops/s | 72.3% |
+| Shared (mmap, 4 processes) | 7.5M ops/s total | — |
+| Shared (mmap, 8 processes) | 6.6M ops/s total | — |
+
+The shared backend reaches **54% of in-process speed** with no Mutex on the read path. The gap is irreducible cross-process overhead: serialization (serde fast-path for primitives, pickle fallback), deterministic hashing, seqlock, and mmap copy. All shared reads are fully lock-free.
+
+This is orders of magnitude faster than network-based caches (Redis: ~100-500K ops/s over localhost) and requires no external services.
+
+---
+
+## Architecture deep dive
+
+### Why warp_cache is fast
 
 ```
 Python: fn(42)
   └─ tp_call (PyO3) ─────────────────────────────── one FFI crossing
        ├─ hash(args)           via ffi::PyObject_Hash
-       ├─ HashMap lookup       Rust hashbrown, precomputed hash
+       ├─ shard select         hash % n_shards
+       ├─ RwLock::read()       per-shard read lock (~8ns)
+       ├─ HashMap lookup       hashbrown
        ├─ equality check       via ffi::PyObject_RichCompareBool
-       ├─ RwLock (read)        parking_lot, ~8ns uncontended
+       ├─ visited.store(true)  AtomicBool, lock-free
        └─ return cached value
 ```
 
-### 2. Read-lock fast path + deferred access log
+1. **Single FFI crossing** — the entire lookup happens in Rust's `__call__` method. No Python wrapper function, no intermediate objects.
+2. **SIEVE eviction** — cache hits set `visited = 1` (one store). No linked-list reordering. Eviction scans for unvisited entries, giving visited entries a second chance.
+3. **Sharded RwLock** — cache hits acquire a cheap per-shard read lock (~8ns). The write lock is only acquired on cache misses (eviction). Multiple readers proceed in parallel across shards.
+4. **Fat LTO + codegen-units=1** — link-time optimization inlines PyO3's FFI wrappers into the hot path.
 
-Cache hits acquire only a **read lock** (`store.rs` lines 110-139). The LRU reorder is deferred — instead of immediately promoting the accessed key (which would require a write lock), the key is pushed to a bounded access log. The log is drained on the next cache miss (under a write lock).
+### How moka_py works
 
-This means cache hits under high hit rates (~65%+ in these benchmarks) almost never contend for the write lock.
+`moka_py` wraps Rust's `moka` crate (inspired by Java's Caffeine). It uses **W-TinyLFU** — a window + main cache with frequency sketches for admission filtering. This provides excellent hit rates but requires more bookkeeping per access. The Python `@cached` decorator crosses the FFI boundary for both key hashing and value retrieval.
 
-### 3. Enum static dispatch
+### How cachebox works
 
-Eviction strategies are dispatched via a Rust `enum` (`StrategyEnum`) with `#[inline(always)]` on every method. The compiler knows all variants at compile time and can inline the specific strategy code directly into the hot path. Compare with `Box<dyn EvictionStrategy>`, which requires vtable indirection on every call.
+`cachebox` implements 7 different cache types in Rust using Google's SwissTable (`hashbrown`). The `@cached` decorator wraps a cache object instance. It defaults to copying dict/list/set return values (`copy_level=1`) to prevent mutation of cached data — a safety feature that adds overhead. Its thread safety uses internal locks.
 
-### 4. Precomputed hash + raw C API equality
+### How lru_cache works
 
-`CacheKey` computes `PyObject_Hash` once at key creation and stores the result. HashMap lookups use the precomputed hash directly. Key equality uses raw `ffi::PyObject_RichCompareBool` — the exact same C call that `lru_cache` uses — bypassing PyO3's safe-but-slower `Python::with_gil` wrapper.
-
-### 5. parking_lot::RwLock (~8ns)
-
-`parking_lot` provides a significantly faster mutex than `std::sync::RwLock` (~8ns vs ~25ns uncontended on arm64). It uses adaptive spinning before parking, reducing syscall overhead.
-
-### 6. Fat LTO + codegen-units=1
-
-The release profile enables fat link-time optimization across all crates (including PyO3) and forces single-codegen-unit compilation. This allows the compiler to inline PyO3's FFI wrappers directly into `warp_cache`'s hot path, eliminating call overhead at the boundary.
-
-```toml
-[profile.release]
-lto = "fat"
-codegen-units = 1
-```
-
-### 7. Atomic hit/miss counters
-
-Hit and miss counts use `AtomicU64` with `Ordering::Relaxed` — no memory barriers, no cache-line bouncing on single-socket machines. Stats collection is essentially free.
+`lru_cache` is C code compiled directly into CPython. It uses the GIL for implicit thread safety (zero lock overhead). The cache is a doubly-linked list over a C hash table — the simplest possible implementation with the lowest possible overhead. Under free-threaded Python, it needs an external `threading.Lock()`.
 
 ---
 
-## Cross-Process Shared Memory
+## When to use each
 
-![Backend Comparison](results/comparison_backends.png)
-
-`warp_cache` is the only library in this comparison that supports cross-process caching via mmap'd shared memory. This enables multiple Python processes to share a single cache without serialization overhead of Redis/Memcached.
-
-| Backend | Throughput | Use case |
-|---|---:|---|
-| Memory (in-process) | ~15.0M ops/s | Single process, maximum speed |
-| Shared (mmap, single process) | ~7.8M ops/s | Cross-process capable, near lock-free reads |
-| Shared (mmap, 8 processes) | ~1.9M ops/s total | Multiple concurrent processes |
-
-The shared backend uses:
-- **mmap'd files** (`$TMPDIR/warp_cache/{name}.cache`) for zero-copy access
-- **Seqlock** in shared memory for cross-process synchronization — reads are optimistic and lock-free (~10-20ns), only writes acquire a spinlock
-- **Open-addressing hash table** with linear probing (power-of-2 capacity for bitmask)
-- **Pickle serialization** for values (required for cross-process compatibility)
-- **Atomic stats** — `hits`, `misses`, and `oversize_skips` use `AtomicU64`, so `info()` and `record_oversize_skip()` never acquire a lock
-
-The read path splits into two phases: (1) an optimistic lock-free hash lookup + value copy under the seqlock, retried if a writer was active; (2) a brief write lock only when ordering needs updating (LRU/MRU/LFU hit). FIFO cache hits are fully lock-free. TTL-expired entries are detected during the optimistic read, then cleaned up under the write lock with re-verification.
-
-The ~2x throughput gap between memory and shared backend is dominated by pickle serialization (the lock itself is near-free on the read path). The shared backend is still orders of magnitude faster than network-based caches (Redis: ~100-500K ops/s over localhost).
-
----
-
-## Feature Matrix
-
-| Feature | warp_cache | lru_cache | moka_py |
-|---|---|---|---|
-| Implementation | Rust (PyO3) | C (CPython builtin) | Rust (PyO3) |
-| Thread-safe (builtin) | Yes (`RwLock`) | No (needs `Lock` wrapper) | Yes |
-| Async support | Yes (auto-detect) | No | No |
-| Cross-process (shared mem) | Yes (mmap) | No | No |
-| TTL support | Yes | No | Yes |
-| LRU eviction | Yes | Yes | Yes |
-| LFU eviction | Yes | No | Yes |
-| FIFO eviction | Yes | No | Yes |
-| MRU eviction | Yes | No | No |
-| Cache statistics | Yes (hits/misses) | Yes (hits/misses) | No |
-| `cache_clear()` | Yes | Yes | No |
-| Decorator API | `@cache()` | `@lru_cache()` | `Moka(maxsize)` |
-| Python version | 3.9+ | Any | 3.8+ |
-| Free-threaded ready | Yes | No (needs Lock) | Yes |
+| Use case | Recommendation |
+|---|---|
+| Single-threaded, maximum speed | **lru_cache** — unbeatable C code, zero overhead |
+| Thread-safe, high throughput | **warp_cache** — fastest thread-safe cache by 2.8x+ |
+| Cross-process (Gunicorn, Celery) | **warp_cache** — only option with shared memory |
+| Per-entry TTL with stampede prevention | **cachebox** (VTTLCache) or **moka_py** (`get_with`) |
+| Time-to-idle (TTI) expiration | **moka_py** — only option with TTI |
+| Manual cache object API (no decorator) | **moka_py** (`Moka(...)`) or **cachebox** (dict-like) |
+| Async with concurrent dedup | **moka_py** (`wait_concurrent=True`) |
+| Free-threaded Python (no GIL) | **warp_cache**, **moka_py**, or **cachebox** — all three are ready |
 
 ---
 
@@ -226,23 +244,20 @@ The ~2x throughput gap between memory and shared backend is dominated by pickle 
 
 **Machine:** Apple M-series (arm64), macOS
 
-**Python versions tested:**
-- Python 3.12.0 (GIL)
-- Python 3.13.2 (GIL)
-- Python 3.13.2 free-threaded (no GIL)
+**Python:** 3.13.2 (CPython, GIL enabled)
 
-**Workload:** Zipf-distributed keys (alpha=1.0) over 2000 unique values, producing ~65% cache hit rate at maxsize=256. This models realistic access patterns where some keys are much hotter than others.
+**Workload:** Zipf-distributed keys (alpha=1.0) over 2000 unique values, producing ~72% cache hit rate at maxsize=256. This models realistic access patterns where some keys are much hotter than others.
 
-**Thread safety wrapping:** `lru_cache` and `cachetools` are not thread-safe, so multi-threaded benchmarks wrap them in `threading.Lock()`. `warp_cache` and `moka_py` are used directly (builtin thread safety).
+**Thread safety wrapping:** `lru_cache` is not thread-safe, so multi-threaded benchmarks wrap it in `threading.Lock()`. `warp_cache`, `moka_py`, and `cachebox` are used directly (builtin thread safety).
 
-**Timing:** `time.perf_counter()` with 100K operations per configuration. Sustained benchmarks run for 10 seconds. Results are the most recent run; variance across runs is typically <5%.
+**Timing:** `time.perf_counter()` with 100K operations per burst configuration. Sustained benchmarks run for 10 seconds. Results are from a single run; variance across runs is typically <5%.
 
-**Library versions:** warp_cache 0.1.0, moka_py 0.3.0, cachetools 7.0.1
+**Library versions:** warp_cache 0.1.0, moka_py 0.3.0, cachebox 5.2.2
 
-**Source data:** `benchmarks/results/bench_py3.12.json`, `bench_py3.13.json`, `bench_default.json` (3.13t)
+**Source data:** `benchmarks/results/bench_default.json`
 
-**Charts generated by:** `benchmarks/_generate_comparison_charts.py`
+**Benchmark runner:** `benchmarks/_bench_runner.py`
 
 ---
 
-*Generated from benchmark data. See `benchmarks/` for full source and raw results.*
+*All benchmarks run on the same machine, same workload, same measurement methodology. See `benchmarks/` for full source and raw results.*

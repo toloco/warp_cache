@@ -20,10 +20,10 @@ import hashlib
 import json
 import os
 
-from warp_cache import Strategy, cache
+from warp_cache import cache
 
 
-@cache(strategy=Strategy.LRU, max_size=1024, ttl=60.0, backend="shared")
+@cache(max_size=1024, ttl=60.0, backend="shared")
 def expensive_compute(n):
     """Simulate a CPU-heavy computation shared across workers."""
     data = str(n).encode()
@@ -51,13 +51,15 @@ def app(environ, start_response):
 
     if path == "/stats":
         info = expensive_compute.cache_info()
-        body = json.dumps({
-            "pid": os.getpid(),
-            "hits": info.hits,
-            "misses": info.misses,
-            "max_size": info.max_size,
-            "current_size": info.current_size,
-        })
+        body = json.dumps(
+            {
+                "pid": os.getpid(),
+                "hits": info.hits,
+                "misses": info.misses,
+                "max_size": info.max_size,
+                "current_size": info.current_size,
+            }
+        )
         start_response("200 OK", [("Content-Type", "application/json")])
         return [body.encode()]
 

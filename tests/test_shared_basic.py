@@ -5,7 +5,7 @@ import glob
 import os
 import tempfile
 
-from warp_cache import SharedCacheInfo, Strategy, cache
+from warp_cache import SharedCacheInfo, cache
 
 
 def _cleanup_shm():
@@ -28,7 +28,7 @@ class TestSharedBasicHitMiss:
     def test_basic_hit_miss(self):
         call_count = 0
 
-        @cache(strategy=Strategy.LRU, max_size=128, backend="shared")
+        @cache(max_size=128, backend="shared")
         def fn(x):
             nonlocal call_count
             call_count += 1
@@ -51,7 +51,7 @@ class TestSharedBasicHitMiss:
     def test_cache_clear(self):
         call_count = 0
 
-        @cache(strategy=Strategy.LRU, max_size=128, backend="shared")
+        @cache(max_size=128, backend="shared")
         def fn(x):
             nonlocal call_count
             call_count += 1
@@ -71,7 +71,7 @@ class TestSharedBasicHitMiss:
         assert call_count == 3  # re-computed
 
     def test_none_return_value(self):
-        @cache(strategy=Strategy.LRU, max_size=128, backend="shared")
+        @cache(max_size=128, backend="shared")
         def fn(x):
             return None
 
@@ -80,7 +80,7 @@ class TestSharedBasicHitMiss:
         assert fn.cache_info().hits == 1
 
     def test_kwargs(self):
-        @cache(strategy=Strategy.LRU, max_size=128, backend="shared")
+        @cache(max_size=128, backend="shared")
         def fn(a, b):
             return a + b
 
@@ -89,7 +89,7 @@ class TestSharedBasicHitMiss:
         assert fn.cache_info().hits == 1
 
     def test_eviction_at_capacity(self):
-        @cache(strategy=Strategy.LRU, max_size=4, backend="shared")
+        @cache(max_size=4, backend="shared")
         def fn(x):
             return x
 
@@ -97,18 +97,12 @@ class TestSharedBasicHitMiss:
             fn(i)
         assert fn.cache_info().current_size == 4
 
-        # This should evict key 0 (LRU)
+        # This should evict an unvisited entry (SIEVE)
         fn(99)
         assert fn.cache_info().current_size == 4
 
-        # key 0 was evicted, so calling it again is a miss
-        fn(0)
-        info = fn.cache_info()
-        assert info.misses == 6  # 4 initial + 99 + 0 re-miss
-
     def test_oversize_skip(self):
         @cache(
-            strategy=Strategy.LRU,
             max_size=128,
             backend="shared",
             max_key_size=16,
@@ -131,7 +125,7 @@ class TestSharedBasicHitMiss:
     def test_fast_path_types(self):
         """All fast-path primitive types should cache correctly."""
 
-        @cache(strategy=Strategy.LRU, max_size=128, backend="shared")
+        @cache(max_size=128, backend="shared")
         def fn(x):
             return x
 
@@ -144,7 +138,7 @@ class TestSharedBasicHitMiss:
     def test_fast_path_tuple_keys(self):
         """Tuples of primitives should use fast-path serialization."""
 
-        @cache(strategy=Strategy.LRU, max_size=128, backend="shared")
+        @cache(max_size=128, backend="shared")
         def fn(a, b):
             return a + b
 
@@ -153,7 +147,7 @@ class TestSharedBasicHitMiss:
         assert fn.cache_info().hits == 1
 
     def test_shared_cache_info_repr(self):
-        @cache(strategy=Strategy.LRU, max_size=64, backend="shared")
+        @cache(max_size=64, backend="shared")
         def fn(x):
             return x
 
@@ -165,79 +159,113 @@ class TestSharedBasicHitMiss:
         assert "misses=1" in r
 
 
-class TestSharedStrategies:
+class TestSharedSieve:
+    """Test SIEVE eviction behavior in the shared memory backend."""
+
     def setup_method(self):
         _cleanup_shm()
 
     def teardown_method(self):
         _cleanup_shm()
 
-    def test_lru_eviction(self):
-        @cache(strategy=Strategy.LRU, max_size=3, backend="shared")
+    def test_unvisited_evicted_first(self):
+        """SIEVE: unvisited entries are evicted before visited ones."""
+        call_count = 0
+
+        @cache(max_size=3, backend="shared")
+        def fn(x):
+            nonlocal call_count
+            call_count += 1
+            return x
+
+        fn(1)  # miss, inserted (unvisited)
+        fn(2)  # miss, inserted (unvisited)
+        fn(3)  # miss, inserted (unvisited)
+        assert call_count == 3
+
+        # Access 2 and 3 — marks them as visited
+        fn(2)  # hit → visited=true
+        fn(3)  # hit → visited=true
+        assert call_count == 3
+
+        # Insert 4 — must evict. 1 is unvisited, should be evicted
+        fn(4)  # miss, evicts 1
+        assert call_count == 4
+
+        # Verify: 1 was evicted (miss), 2 and 3 survive (hit)
+        call_count = 0
+        fn(2)  # hit
+        assert call_count == 0
+        fn(3)  # hit
+        assert call_count == 0
+        fn(1)  # miss — was evicted
+        assert call_count == 1
+
+    def test_second_chance(self):
+        """SIEVE: visited entries get their visited bit cleared (second chance)
+        and are only evicted on a subsequent pass if still unvisited."""
+        call_count = 0
+
+        @cache(max_size=2, backend="shared")
+        def fn(x):
+            nonlocal call_count
+            call_count += 1
+            return x
+
+        fn(1)  # miss
+        fn(2)  # miss
+        assert call_count == 2
+
+        # Visit both entries
+        fn(1)  # hit → visited=true
+        fn(2)  # hit → visited=true
+
+        # Insert 3 — all entries visited, so the hand scans and clears visited bits,
+        # then evicts the first entry it finds unvisited on the second pass
+        fn(3)  # miss, evicts one of {1, 2}
+        assert call_count == 3
+
+        info = fn.cache_info()
+        assert info.current_size == 2
+
+    def test_eviction_respects_capacity(self):
+        """Cache never exceeds max_size."""
+
+        @cache(max_size=5, backend="shared")
         def fn(x):
             return x
 
-        fn(1)
-        fn(2)
-        fn(3)
-        fn(1)  # touch 1, making 2 the LRU
-        fn(4)  # evict 2
-        assert fn.cache_info().current_size == 3
+        for i in range(100):
+            fn(i)
+            info = fn.cache_info()
+            assert info.current_size <= 5
 
-        # 2 was evicted
-        fn(2)
-        assert fn.cache_info().misses == 5  # 1,2,3,4 + re-miss on 2
+    def test_hit_sets_visited(self):
+        """A cache hit marks the entry as visited, protecting it from eviction."""
+        call_count = 0
 
-    def test_fifo_eviction(self):
-        @cache(strategy=Strategy.FIFO, max_size=3, backend="shared")
+        @cache(max_size=3, backend="shared")
         def fn(x):
+            nonlocal call_count
+            call_count += 1
             return x
 
-        fn(1)
-        fn(2)
-        fn(3)
-        fn(1)  # touch 1 — FIFO doesn't reorder
-        fn(4)  # evict 1 (first inserted)
-        assert fn.cache_info().current_size == 3
+        fn(1)  # miss
+        fn(2)  # miss
+        fn(3)  # miss
+        # All entries are unvisited
 
-        # 1 was evicted
-        fn(1)
-        assert fn.cache_info().misses == 5
+        # Visit entry 1
+        fn(1)  # hit → visited=true
 
-    def test_mru_eviction(self):
-        @cache(strategy=Strategy.MRU, max_size=3, backend="shared")
-        def fn(x):
-            return x
+        # Insert 4 — evicts an unvisited entry (2 or 3), not 1
+        fn(4)  # miss
+        assert call_count == 4
 
-        fn(1)
-        fn(2)
-        fn(3)
-        fn(2)  # touch 2, making it most recently used
-        fn(4)  # evict 2 (MRU)
-        assert fn.cache_info().current_size == 3
-
-        # 2 was evicted
-        fn(2)
-        assert fn.cache_info().misses == 5
-
-    def test_lfu_eviction(self):
-        @cache(strategy=Strategy.LFU, max_size=3, backend="shared")
-        def fn(x):
-            return x
-
-        fn(1)
-        fn(2)
-        fn(3)
-        fn(1)
-        fn(1)  # freq(1) = 2
-        fn(2)  # freq(2) = 1
-        # freq(3) = 0 — least frequent
-        fn(4)  # evict 3 (lowest frequency)
-        assert fn.cache_info().current_size == 3
-
-        # 3 was evicted
-        fn(3)
-        assert fn.cache_info().misses == 5
+        # Entry 1 should still be cached
+        call_count = 0
+        fn(1)  # hit
+        assert call_count == 0
 
 
 class TestSharedTTL:
@@ -250,7 +278,7 @@ class TestSharedTTL:
     def test_ttl_expiry(self):
         import time
 
-        @cache(strategy=Strategy.LRU, max_size=128, ttl=0.1, backend="shared")
+        @cache(max_size=128, ttl=0.1, backend="shared")
         def fn(x):
             return x * 2
 
@@ -264,7 +292,7 @@ class TestSharedTTL:
         assert fn.cache_info().misses == 2
 
     def test_ttl_not_expired(self):
-        @cache(strategy=Strategy.LRU, max_size=128, ttl=10.0, backend="shared")
+        @cache(max_size=128, ttl=10.0, backend="shared")
         def fn(x):
             return x * 2
 
@@ -285,7 +313,7 @@ class TestSharedMemoryBackend:
     def test_default_is_memory(self):
         from warp_cache._warp_cache_rs import CacheInfo
 
-        @cache(strategy=Strategy.LRU, max_size=128)
+        @cache(max_size=128)
         def fn(x):
             return x
 
@@ -294,7 +322,7 @@ class TestSharedMemoryBackend:
         assert isinstance(info, CacheInfo)
 
     def test_shared_returns_shared_info(self):
-        @cache(strategy=Strategy.LRU, max_size=128, backend="shared")
+        @cache(max_size=128, backend="shared")
         def fn(x):
             return x
 

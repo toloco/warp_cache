@@ -1,7 +1,6 @@
 mod entry;
 mod key;
 mod store;
-mod strategies;
 
 #[cfg(not(target_os = "windows"))]
 mod serde;

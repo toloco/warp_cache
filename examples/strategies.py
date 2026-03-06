@@ -2,40 +2,45 @@
 # requires-python = ">=3.10"
 # dependencies = ["warp_cache"]
 # ///
-"""Eviction strategies — LRU, MRU, FIFO, LFU."""
+"""SIEVE eviction — scan-resistant caching with second chances."""
 
 import logging
 
-from warp_cache import Strategy, cache
+from warp_cache import cache
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 log = logging.getLogger(__name__)
 
 
-def demo_strategy(name, strategy):
-    @cache(strategy=strategy, max_size=3)
+if __name__ == "__main__":
+    log.info("SIEVE eviction demo: visited entries get a second chance\n")
+
+    call_count = 0
+
+    @cache(max_size=3)
     def fn(x):
+        global call_count
+        call_count += 1
         return x * 10
 
-    # Fill the cache: [1, 2, 3]
+    # Fill the cache: [1, 2, 3] — all unvisited
     fn(1)
     fn(2)
     fn(3)
+    log.info("After inserting 1, 2, 3: %s", fn.cache_info())
 
-    # Access 1 and 2 again (affects LRU/LFU ordering)
+    # Access 1 and 2 — marks them as visited (protected)
     fn(1)
     fn(2)
+    log.info("After accessing 1 and 2 (now visited): hits=%d", fn.cache_info().hits)
 
-    # Insert 4 — triggers eviction
+    # Insert 4 — triggers eviction. Entry 3 is unvisited, so it's evicted.
     fn(4)
+    log.info("After inserting 4: %s", fn.cache_info())
 
-    info = fn.cache_info()
-    log.info("%4s: hits=%d, misses=%d, size=%d", name, info.hits, info.misses, info.current_size)
-
-
-if __name__ == "__main__":
-    log.info("Each strategy evicts a different entry when the cache is full:\n")
-    demo_strategy("LRU", Strategy.LRU)    # Evicts least recently used (3)
-    demo_strategy("MRU", Strategy.MRU)    # Evicts most recently used (2)
-    demo_strategy("FIFO", Strategy.FIFO)  # Evicts first inserted (1)
-    demo_strategy("LFU", Strategy.LFU)    # Evicts least frequently used (3)
+    # Verify: 3 was evicted (miss), 1 and 2 survived (hit)
+    call_count = 0
+    fn(1)  # hit
+    fn(2)  # hit
+    fn(3)  # miss — was evicted
+    log.info("Accessing 1 (hit), 2 (hit), 3 (miss — evicted): recomputed=%d", call_count)

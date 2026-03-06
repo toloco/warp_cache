@@ -35,7 +35,6 @@ impl ShmRegion {
     /// Create a new shared memory region, initializing all structures.
     pub fn create(
         name: &str,
-        strategy: u32,
         capacity: u32,
         slot_size: u32,
         max_key_size: u32,
@@ -84,7 +83,7 @@ impl ShmRegion {
         let header = unsafe { &mut *(mmap.as_mut_ptr() as *mut Header) };
         header.magic = MAGIC;
         header.version = VERSION;
-        header.strategy = strategy;
+        header.strategy = 0;
         header.capacity = capacity;
         header.ht_capacity = ht_capacity;
         header.slot_size = slot_size;
@@ -98,6 +97,7 @@ impl ShmRegion {
         header.list_head = SLOT_NONE;
         header.list_tail = SLOT_NONE;
         header.free_head = 0; // first slot is start of free list
+        header.sieve_hand = SLOT_NONE;
 
         // Initialize hash table buckets to empty
         let ht_base = layout::ht_offset();
@@ -182,7 +182,6 @@ impl ShmRegion {
     /// Create if doesn't exist, otherwise open.
     pub fn create_or_open(
         name: &str,
-        strategy: u32,
         capacity: u32,
         slot_size: u32,
         max_key_size: u32,
@@ -200,7 +199,6 @@ impl ShmRegion {
                     let header = region.header();
                     if header.version == VERSION
                         && header.capacity == capacity
-                        && header.strategy == strategy
                         && header.max_key_size == max_key_size
                         && header.max_value_size == max_value_size
                     {
@@ -217,7 +215,6 @@ impl ShmRegion {
 
         Self::create(
             name,
-            strategy,
             capacity,
             slot_size,
             max_key_size,

@@ -3,7 +3,7 @@ import sys
 
 import pytest
 
-from warp_cache import Strategy, cache
+from warp_cache import cache
 from warp_cache._decorator import AsyncCachedFunction
 
 # ── Basic hit/miss ────────────────────────────────────────────────────────
@@ -13,7 +13,7 @@ from warp_cache._decorator import AsyncCachedFunction
 async def test_async_basic_hit_miss():
     call_count = 0
 
-    @cache(strategy=Strategy.LRU, max_size=128)
+    @cache(max_size=128)
     async def add(a, b):
         nonlocal call_count
         call_count += 1
@@ -123,22 +123,20 @@ async def test_async_concurrent():
     assert call_count >= 3
 
 
-# ── Strategies ────────────────────────────────────────────────────────────
+# ── Eviction ──────────────────────────────────────────────────────────────
 
 
 @pytest.mark.asyncio
-async def test_async_strategies():
-    for strat in [Strategy.LRU, Strategy.MRU, Strategy.FIFO, Strategy.LFU]:
+async def test_async_eviction():
+    @cache(max_size=2)
+    async def fn(x):
+        return x
 
-        @cache(strategy=strat, max_size=2)
-        async def fn(x):
-            return x
-
-        assert await fn(1) == 1
-        assert await fn(2) == 2
-        assert await fn(3) == 3  # triggers eviction
-        info = fn.cache_info()
-        assert info.current_size == 2
+    assert await fn(1) == 1
+    assert await fn(2) == 2
+    assert await fn(3) == 3  # triggers eviction
+    info = fn.cache_info()
+    assert info.current_size == 2
 
 
 # ── Shared backend ───────────────────────────────────────────────────────

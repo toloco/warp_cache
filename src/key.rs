@@ -50,3 +50,10 @@ impl PartialEq for CacheKey {
 }
 
 impl Eq for CacheKey {}
+
+impl CacheKey {
+    #[inline(always)]
+    pub fn shard_index(&self, n_shards: usize) -> usize {
+        self.hash as usize % n_shards
+    }
+}

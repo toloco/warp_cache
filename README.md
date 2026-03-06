@@ -1,22 +1,21 @@
 # warp_cache
 
-A thread-safe Python caching decorator backed by a Rust extension. Through a
-series of optimizations — eliminating serialization, moving the call wrapper
-into Rust, applying link-time optimization, and using direct C API calls — we
-achieve **0.55-0.66x** of `lru_cache`'s single-threaded throughput while
-providing native thread safety that delivers **1.3-1.4x** higher throughput
-under concurrent load — and **18-24x** faster than pure-Python `cachetools`.
+A thread-safe Python caching decorator backed by a Rust extension. Uses
+**SIEVE eviction** for scan-resistant, near-optimal hit rates with per-shard
+read locks. The entire cache lookup happens in a single Rust `__call__` — no Python
+wrapper overhead. **13-20M ops/s** single-threaded, **22x** faster than
+`cachetools`, with a cross-process shared memory backend reaching **9.2M ops/s**.
 
 ## Features
 
-- **Drop-in replacement for `functools.lru_cache`** — same decorator pattern and hashable-argument requirement, with added thread safety, TTL, eviction strategies, and async support
-- **Thread-safe** out of the box (`parking_lot::RwLock` in Rust)
+- **Drop-in replacement for `functools.lru_cache`** — same decorator pattern and hashable-argument requirement, with added thread safety, TTL, and async support
+- **[SIEVE eviction](https://junchengyang.com/publication/nsdi24-SIEVE.pdf)** — a simple, scan-resistant algorithm with near-optimal hit rates and O(1) overhead per access
+- **Thread-safe** out of the box (sharded `RwLock` + `AtomicBool` for SIEVE visited bit)
 - **Async support**: works with `async def` functions — zero overhead on sync path
-- **Shared memory backend**: cross-process caching via mmap
-- **Multiple eviction strategies**: LRU, MRU, FIFO, LFU
+- **Shared memory backend**: cross-process caching via mmap with fully lock-free reads
 - **TTL support**: optional time-to-live expiration
 - **Single FFI crossing**: entire cache lookup happens in Rust, no Python wrapper overhead
-- **12-18M ops/s** single-threaded, **16M ops/s** under concurrent load, **18-24x** faster than `cachetools`
+- **13-20M ops/s** single-threaded, **17M+ ops/s** under concurrent load, **22x** faster than `cachetools`
 
 ## Installation
 
@@ -59,20 +58,39 @@ Like `lru_cache`, all arguments must be hashable. See the [usage guide](docs/usa
 
 | Metric | warp_cache | cachetools | lru_cache |
 |---|---|---|---|
-| Single-threaded | 12-18M ops/s | 0.6-1.2M ops/s | 21-40M ops/s |
-| Multi-threaded (8T) | 16M ops/s | 770K ops/s (with Lock) | 12M ops/s (with Lock) |
-| Thread-safe | Yes (RwLock) | No (manual Lock) | No |
+| Single-threaded (cache=256) | 18.1M ops/s | 814K ops/s | 32.1M ops/s |
+| Multi-threaded (8T) | 17.9M ops/s | 774K ops/s (with Lock) | 12.3M ops/s (with Lock) |
+| Shared memory (single proc) | 9.2M ops/s (mmap) | No | No |
+| Shared memory (4 procs) | 7.5M ops/s total | No | No |
+| Thread-safe | Yes (sharded RwLock) | No (manual Lock) | No |
 | Async support | Yes | No | No |
-| Cross-process (shared) | ~7.8M ops/s (mmap) | No | No |
 | TTL support | Yes | Yes | No |
-| Eviction strategies | LRU, MRU, FIFO, LFU | LRU, LFU, FIFO, RR | LRU only |
+| Eviction | SIEVE (scan-resistant) | LRU, LFU, FIFO, RR | LRU only |
 | Implementation | Rust (PyO3) | Pure Python | C (CPython) |
 
-Under concurrent load, `warp_cache` delivers **1.3-1.4x** higher throughput than `lru_cache + Lock` and **18-24x** higher than `cachetools`. See [full benchmarks](docs/performance.md) for details.
+`warp_cache` is the fastest *thread-safe* cache — **22x** faster than `cachetools` and **4.9x** faster than `moka_py`. Under multi-threaded load, it's **1.5x faster** than `lru_cache + Lock`. See [full benchmarks](docs/performance.md) for details.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="benchmarks/results/comparison_mt_scaling_dark.svg">
+  <img src="benchmarks/results/comparison_mt_scaling_light.svg" alt="Multi-thread scaling: GIL vs no-GIL">
+</picture>
+
+## Eviction quality: SIEVE vs LRU
+
+Beyond throughput, SIEVE delivers **up to 21.6% miss reduction** vs LRU. From the [NSDI'24 paper](https://junchengyang.com/publication/nsdi24-SIEVE.pdf), key findings reproduced in `benchmarks/bench_sieve.py` (1M requests, Zipf-distributed keys):
+
+| Workload | SIEVE | LRU | Miss Reduction |
+|---|---:|---:|---:|
+| Zipf, 10% cache | 74.5% | 67.5% | +21.6% |
+| Scan resistance (70% hot) | 69.9% | 63.5% | +17.6% |
+| One-hit wonders (25% unique) | 53.9% | 43.7% | +18.1% |
+| Working set shift | 75.5% | 69.7% | +16.6% |
+
+SIEVE's visited-bit design protects hot entries from sequential scans and filters out one-hit wonders that would pollute LRU. See [eviction quality benchmarks](docs/performance.md#sieve-eviction-quality) for the full breakdown.
 
 ## Documentation
 
-- **[Usage guide](docs/usage.md)** — eviction strategies, async, TTL, shared memory, decorator parameters
+- **[Usage guide](docs/usage.md)** — SIEVE eviction, async, TTL, shared memory, decorator parameters
 - **[Performance](docs/performance.md)** — benchmarks, architecture deep-dive, optimization journey
 - **[Alternatives](docs/alternatives.md)** — comparison with cachebox, moka-py, cachetools, lru_cache
 - **[Examples](examples/)** — runnable scripts for every feature (`uv run examples/<name>.py`)

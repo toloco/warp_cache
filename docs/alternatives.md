@@ -9,20 +9,22 @@ The Python caching ecosystem includes several notable libraries. Here's how they
 | Async support | Yes | Yes | Yes | No | No |
 | Cross-process (shared mem) | Yes (mmap) | No | No | No | No |
 | TTL support | Yes | Yes | Yes (+ TTI) | Yes | No |
-| LRU | Yes | Yes | Yes | Yes | Yes |
-| LFU | Yes | Yes | TinyLFU | Yes | No |
-| FIFO | Yes | Yes | No | Yes | No |
-| MRU | Yes | No | No | No | No |
-| Custom key function | No | No | No | Yes | No |
-| Stampede prevention | No | Yes | Yes | No | No |
+| Eviction | SIEVE | LRU/LFU/FIFO/RR | TinyLFU/LRU | LRU/LFU/FIFO/RR | LRU |
+| Stampede prevention | No | Yes | Yes (`get_with`) | No | No |
 | Per-entry TTL | No | Yes (VTTLCache) | Yes | No | No |
+| Manual cache object | No | Yes (dict-like) | Yes (`Moka(...)`) | Yes | No |
+| Cache statistics | Yes | Yes (+ memory) | No | Yes | Yes |
 
-**Performance ballpark** (not directly comparable — different benchmarking setups):
+**Performance** (same machine, same workload, single-threaded, cache=256):
 
-- [cachebox](https://github.com/awolverp/cachebox): ~3.7M ops/s LRU insert (from cachebox-benchmark, Python 3.13)
-- [moka-py](https://github.com/deliro/moka-py): ~8.9M ops/s get (from moka-py README)
-- warp_cache: 14-20M ops/s get (our benchmarks, see [performance](performance.md))
+| Library | ops/s | vs warp_cache |
+|---|---:|---:|
+| lru_cache | 32.1M | 1.8x faster |
+| warp_cache | 18.1M | 1.0x |
+| moka_py | 3.7M | 4.9x slower |
+| cachebox | 1.5M | 12.1x slower |
+| cachetools | 814K | 22.2x slower |
 
-These numbers come from different machines, different workloads, and different measurement methodologies — treat them as order-of-magnitude indicators, not head-to-head results.
+See [full benchmarks](../benchmarks/COMPARISON.md) for multi-thread, TTL, shared memory, and sustained throughput results.
 
-**warp_cache's niche**: the only Rust-backed cache combining shared memory (cross-process mmap), all four eviction strategies (LRU/MRU/FIFO/LFU), and builtin thread safety in a single decorator. If you need stampede prevention or per-entry TTL, look at cachebox or moka-py. If you need a custom key function, cachetools is the way to go.
+**warp_cache's niche**: the only Rust-backed cache combining shared memory (cross-process mmap), SIEVE eviction (scan-resistant, near-optimal hit rates), and builtin thread safety in a single decorator. If you need stampede prevention or per-entry TTL, look at cachebox or moka-py. If you need a manual cache object API, look at moka-py or cachebox. If you need maximum single-threaded speed, use `lru_cache`.

@@ -5,7 +5,7 @@ import warnings
 from collections.abc import Callable
 from typing import Any
 
-from warp_cache._strategies import Backend, Strategy
+from warp_cache._strategies import Backend
 from warp_cache._warp_cache_rs import (
     CachedFunction,
     CacheInfo,
@@ -68,7 +68,6 @@ def _resolve_backend(backend: str | int | Backend) -> Backend:
 
 
 def cache(
-    strategy: Strategy = Strategy.LRU,
     max_size: int = 128,
     ttl: float | None = None,
     backend: str | int | Backend = Backend.MEMORY,
@@ -80,8 +79,10 @@ def cache(
     Supports both sync and async functions. The async detection happens
     once at decoration time — zero overhead on the sync path.
 
+    Uses SIEVE eviction — a simple, scan-resistant algorithm that provides
+    near-optimal hit rates with O(1) overhead per access.
+
     Args:
-        strategy: Eviction strategy (LRU, MRU, FIFO, LFU).
         max_size: Maximum number of cached entries.
         ttl: Time-to-live in seconds (None = no expiry).
         backend: Backend.MEMORY (default) for in-process cache,
@@ -89,15 +90,6 @@ def cache(
                  Also accepts the strings "memory" and "shared".
         max_key_size: Max serialized key size in bytes (shared backend only).
         max_value_size: Max serialized value size in bytes (shared backend only).
-
-    Note:
-        Eviction ordering (LRU, MRU, LFU) is approximate under sustained
-        hit-only workloads.  The in-process backend batches ordering updates
-        (up to 64) under a read lock and replays them on the next write lock
-        acquisition.  If the batch fills before a cache miss triggers a write
-        lock, additional ordering updates are dropped.  In practice this
-        rarely affects eviction quality, but under pathological access
-        patterns the evicted entry may not be the theoretically optimal one.
     """
     resolved_backend = _resolve_backend(backend)
 
@@ -105,7 +97,6 @@ def cache(
         if resolved_backend == Backend.SHARED:
             inner = SharedCachedFunction(
                 fn,
-                int(strategy),
                 max_size,
                 ttl=ttl,
                 max_key_size=max_key_size if max_key_size is not None else 512,
@@ -122,7 +113,7 @@ def cache(
                     "max_value_size has no effect with the memory backend",
                     stacklevel=2,
                 )
-            inner = CachedFunction(fn, int(strategy), max_size, ttl=ttl)
+            inner = CachedFunction(fn, max_size, ttl=ttl)
 
         if asyncio.iscoroutinefunction(fn):
             return AsyncCachedFunction(fn, inner)
@@ -130,21 +121,3 @@ def cache(
         return inner
 
     return decorator
-
-
-def lru_cache(
-    max_size: int = 128,
-    ttl: float | None = None,
-    backend: str | int | Backend = Backend.MEMORY,
-    max_key_size: int | None = None,
-    max_value_size: int | None = None,
-) -> Callable[[Callable[..., Any]], CachedFunction | SharedCachedFunction | AsyncCachedFunction]:
-    """Shorthand for ``cache(strategy=Strategy.LRU, ...)``."""
-    return cache(
-        strategy=Strategy.LRU,
-        max_size=max_size,
-        ttl=ttl,
-        backend=backend,
-        max_key_size=max_key_size,
-        max_value_size=max_value_size,
-    )

@@ -17,7 +17,7 @@ RUNNER="$SCRIPT_DIR/_bench_runner.py"
 REPORT_GEN="$SCRIPT_DIR/_report_generator.py"
 
 # Defaults
-VERSIONS="3.12 3.13 3.13t"
+VERSIONS="3.12 3.13 3.13t 3.14"
 QUICK=""
 ROUNDS=""
 REPORT_ONLY=false

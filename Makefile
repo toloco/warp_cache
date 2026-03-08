@@ -1,4 +1,4 @@
-.PHONY: help fmt lint typecheck build build-debug test test-rust test-only bench bench-quick bench-all bench-report bench-sieve clean publish publish-test setup all
+.PHONY: help fmt lint typecheck build build-debug test test-rust test-only test-matrix bench bench-quick bench-all bench-report bench-sieve clean publish publish-test setup all
 
 # Optional: specify Python version, e.g. make build PYTHON=3.14
 PYTHON ?=

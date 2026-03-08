@@ -233,12 +233,6 @@ def fmt(ops: float) -> str:
     return f"{ops:>7.0f} "
 
 
-def ratio_str(a: float, b: float) -> str:
-    if b == 0:
-        return "  inf"
-    return f"{a / b:.2f}x"
-
-
 def _time_loop(fn, keys: list[int]) -> float:
     """Time a cache function over a list of keys, return elapsed seconds."""
     t0 = time.perf_counter()

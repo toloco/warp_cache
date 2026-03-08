@@ -30,10 +30,9 @@ pub struct SharedCachedFunction;
 #[pymethods]
 impl SharedCachedFunction {
     #[new]
-    #[pyo3(signature = (_fn_obj, _strategy, _max_size, _ttl=None, _max_key_size=512, _max_value_size=4096, _shm_name=None))]
+    #[pyo3(signature = (_fn_obj, _max_size, _ttl=None, _max_key_size=512, _max_value_size=4096, _shm_name=None))]
     fn new(
         _fn_obj: Py<PyAny>,
-        _strategy: u8,
         _max_size: usize,
         _ttl: Option<f64>,
         _max_key_size: usize,

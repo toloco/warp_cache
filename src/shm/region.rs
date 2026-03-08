@@ -23,12 +23,9 @@ fn shm_dir() -> PathBuf {
 
 /// The full shared-memory region, owning the mmap handle and providing
 /// raw accessors to the structures within.
-#[allow(dead_code)]
 pub struct ShmRegion {
     pub mmap: MmapMut,
-    pub path: PathBuf,
     pub lock_mmap: MmapMut,
-    pub lock_path: PathBuf,
 }
 
 impl ShmRegion {
@@ -130,22 +127,7 @@ impl ShmRegion {
         mmap.flush()?;
         lock_mmap.flush()?;
 
-        Ok(ShmRegion {
-            mmap,
-            path: data_path,
-            lock_mmap,
-            lock_path,
-        })
-    }
-
-    /// Open an existing shared memory region.
-    #[allow(dead_code)]
-    pub fn open(name: &str) -> io::Result<Self> {
-        let dir = shm_dir();
-        let data_path = dir.join(format!("{name}.data"));
-        let lock_path = dir.join(format!("{name}.lock"));
-
-        Self::open_paths(&data_path, &lock_path)
+        Ok(ShmRegion { mmap, lock_mmap })
     }
 
     fn open_paths(data_path: &Path, lock_path: &Path) -> io::Result<ShmRegion> {
@@ -171,12 +153,7 @@ impl ShmRegion {
             ));
         }
 
-        Ok(ShmRegion {
-            mmap,
-            path: data_path.to_path_buf(),
-            lock_mmap,
-            lock_path: lock_path.to_path_buf(),
-        })
+        Ok(ShmRegion { mmap, lock_mmap })
     }
 
     /// Create if doesn't exist, otherwise open.
@@ -227,11 +204,6 @@ impl ShmRegion {
         unsafe { &*(self.mmap.as_ptr() as *const Header) }
     }
 
-    #[allow(dead_code)]
-    pub fn header_mut(&mut self) -> &mut Header {
-        unsafe { &mut *(self.mmap.as_mut_ptr() as *mut Header) }
-    }
-
     pub fn lock(&self) -> ShmSeqLock {
         unsafe { ShmSeqLock::from_existing(self.lock_mmap.as_ptr() as *mut u8) }
     }
@@ -240,16 +212,4 @@ impl ShmRegion {
         self.mmap.as_ptr()
     }
 
-    #[allow(dead_code)]
-    pub fn base_mut_ptr(&mut self) -> *mut u8 {
-        self.mmap.as_mut_ptr()
-    }
-
-    /// Remove the backing files.
-    #[allow(dead_code)]
-    pub fn unlink(&self) -> io::Result<()> {
-        let _ = fs::remove_file(&self.path);
-        let _ = fs::remove_file(&self.lock_path);
-        Ok(())
-    }
 }

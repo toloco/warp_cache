@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import warnings
 from collections.abc import Callable
-from typing import Any
+from typing import Any, TypeVar
 
 from warp_cache._strategies import Backend
 from warp_cache._warp_cache_rs import (
@@ -12,6 +12,8 @@ from warp_cache._warp_cache_rs import (
     SharedCachedFunction,
     SharedCacheInfo,
 )
+
+F = TypeVar("F", bound=Callable[..., Any])
 
 
 class AsyncCachedFunction:
@@ -73,7 +75,7 @@ def cache(
     backend: str | int | Backend = Backend.MEMORY,
     max_key_size: int | None = None,
     max_value_size: int | None = None,
-) -> Callable[[Callable[..., Any]], CachedFunction | SharedCachedFunction | AsyncCachedFunction]:
+) -> Callable[[F], F]:
     """Caching decorator backed by a Rust store.
 
     Supports both sync and async functions. The async detection happens
@@ -93,7 +95,7 @@ def cache(
     """
     resolved_backend = _resolve_backend(backend)
 
-    def decorator(fn):
+    def decorator(fn: F) -> F:
         if resolved_backend == Backend.SHARED:
             inner = SharedCachedFunction(
                 fn,
@@ -116,8 +118,8 @@ def cache(
             inner = CachedFunction(fn, max_size, ttl=ttl)
 
         if asyncio.iscoroutinefunction(fn):
-            return AsyncCachedFunction(fn, inner)
+            return AsyncCachedFunction(fn, inner)  # type: ignore[return-value]
 
-        return inner
+        return inner  # type: ignore[return-value]
 
     return decorator

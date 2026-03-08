@@ -5,7 +5,7 @@ build-backend = "maturin"
 [project]
 name = "warp_cache"
 dynamic = ["version"]
-description = "Thread-safe Python caching decorator backed by a Rust extension"
+description = "Thread-safe Python caching decorator powered by a Rust extension. Implements SIEVE eviction for scan-resistant, near-optimal hit rates with zero-cost locking under the GIL — entire cache lookup in a single Rust __call__, no Python wrapper overhead. 16–23M ops/s single-threaded, 25× faster than cachetools, with cross-process shared memory support."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.9"

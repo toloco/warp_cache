@@ -26,7 +26,7 @@ uv run pytest tests/test_basic.py::test_cache_hit -v
 
 **Test across Python versions:**
 ```bash
-make test-matrix -j     # Parallel across 3.10-3.14
+make test-matrix -j     # Parallel across 3.9-3.14
 make test PYTHON=3.13   # Specific version
 ```
 
@@ -38,12 +38,12 @@ make test PYTHON=3.13   # Specific version
 - **`store.rs`** — In-process backend: `CachedFunction` uses sharded `hashbrown::HashMap` with passthrough hasher (avoids re-hashing Python's precomputed hash) + GIL-conditional locking (`GilCell` under GIL for zero-cost, `parking_lot::RwLock` under free-threaded Python). The `__call__` hot path uses `BorrowedArgs` to look up via borrowed pointer (no `CacheKey` allocation on hits), with `CacheKey` only materialized on cache miss for storage
 - **`serde.rs`** — Fast-path binary serialization for common primitives (None, bool, int, float, str, bytes, flat tuples); avoids pickle overhead for the shared backend
 - **`shared_store.rs`** — Cross-process backend: `SharedCachedFunction` holds `ShmCache` directly (no Mutex), with cached `max_key_size`/`max_value_size` fields and a pre-built `ahash::RandomState`. Serializes via serde.rs (with pickle fallback), stores in mmap'd shared memory
-- **`entry.rs`** — `CacheEntry` { value, created_at, visited }
+- **`entry.rs`** — `SieveEntry` { value, created_at, visited }
 - **`key.rs`** — `CacheKey` wraps `Py<PyAny>` + precomputed hash; uses raw `ffi::PyObject_RichCompareBool` for equality. Also provides `BorrowedArgs` (zero-alloc borrowed key for hit-path lookups via hashbrown's `Equivalent` trait)
 - **`shm/`** — Shared memory infrastructure:
   - `mod.rs` — `ShmCache`: create/open, get/set with serialized bytes. Uses interior mutability (`&self` methods): reads are lock-free (seqlock), writes acquire seqlock internally. `next_unique_id` is `AtomicU64`
   - `layout.rs` — Header + SlotHeader structs, memory offsets
-  - `region.rs` — `ShmRegion`: mmap file management (`$TMPDIR/warp_cache/{name}.cache`)
+  - `region.rs` — `ShmRegion`: mmap file management (`$TMPDIR/warp_cache/{name}.data` + `{name}.lock`)
   - `lock.rs` — `ShmSeqLock`: seqlock (optimistic reads + TTAS spinlock) in shared memory
   - `hashtable.rs` — Open-addressing with linear probing (power-of-2 capacity, bitmask)
   - `ordering.rs` — SIEVE eviction: intrusive linked list + `sieve_evict()` hand scan
@@ -69,5 +69,5 @@ make test PYTHON=3.13   # Specific version
 
 ## Linting
 
-- Python: ruff (rules: E, F, W, I, UP, B, SIM; line-length=100; target py310)
+- Python: ruff (rules: E, F, W, I, UP, B, SIM; line-length=100; target py39)
 - Rust: `cargo clippy -- -D warnings`

@@ -27,4 +27,4 @@ The Python caching ecosystem includes several notable libraries. Here's how they
 
 See [full benchmarks](../benchmarks/COMPARISON.md) for multi-thread, TTL, shared memory, and sustained throughput results.
 
-**warp_cache's niche**: the only Rust-backed cache combining shared memory (cross-process mmap), SIEVE eviction (scan-resistant, near-optimal hit rates), and builtin thread safety in a single decorator. If you need stampede prevention or per-entry TTL, look at cachebox or moka-py. If you need a manual cache object API, look at moka-py or cachebox. If you need maximum single-threaded speed, use `lru_cache`.
+**Where warp_cache fits**: the only Rust-backed cache with shared memory (cross-process mmap), SIEVE eviction, and builtin thread safety in one decorator. If you need stampede prevention or per-entry TTL, look at cachebox or moka-py. If you need a manual cache object API, look at moka-py or cachebox. If you need maximum single-threaded speed, use `lru_cache`.

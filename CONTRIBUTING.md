@@ -31,10 +31,10 @@ make test         # Build + run all tests
 
 ### Project Structure
 
-- **`src/`** — Rust core (PyO3 extension module)
-- **`warp_cache/`** — Python package (decorator, strategies)
-- **`tests/`** — pytest test suite
-- **`benchmarks/`** — Performance benchmarks
+- **`src/`** - Rust core (PyO3 extension module)
+- **`warp_cache/`** - Python package (decorator, strategies)
+- **`tests/`** - pytest test suite
+- **`benchmarks/`** - Performance benchmarks
 
 ### Code Style
 

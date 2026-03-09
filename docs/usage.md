@@ -22,10 +22,10 @@ expensive(1, 2)  # returns cached result
 def process(data):
     return sum(data)
 
-process((1, 2, 3))    # ok — tuples are hashable
-process("hello")       # ok — strings are hashable
-process([1, 2, 3])    # TypeError — lists are not hashable
-process({"a": 1})     # TypeError — dicts are not hashable
+process((1, 2, 3))    # ok - tuples are hashable
+process("hello")       # ok - strings are hashable
+process([1, 2, 3])    # TypeError - lists are not hashable
+process({"a": 1})     # TypeError - dicts are not hashable
 ```
 
 If you need to cache a function that takes unhashable arguments, convert them
@@ -34,20 +34,20 @@ to hashable equivalents before passing (e.g. `tuple(my_list)`,
 
 ## Eviction
 
-warp_cache uses **SIEVE** eviction — a simple, scan-resistant algorithm that provides near-optimal hit rates with O(1) overhead per access. There is no strategy parameter; SIEVE is used automatically for both the memory and shared backends.
+warp_cache uses **SIEVE** eviction - an algorithm that gets better hit rates than LRU with O(1) cost per access. There is no strategy parameter; SIEVE is used for both backends.
 
 SIEVE works by maintaining a `visited` bit on each cache entry:
 
 - **On cache hit**: the entry's `visited` bit is set to 1 (protecting it from eviction)
 - **On eviction**: a rotating "hand" scans the cache. Entries with `visited=1` get a second chance (bit cleared to 0, hand advances). The first entry found with `visited=0` is evicted.
 
-This means frequently-accessed entries are protected, while entries that were cached but never re-accessed are evicted first — similar to LRU but with better scan resistance and lower overhead.
+Frequently-accessed entries stay protected, while entries that were cached but never re-accessed get evicted first. Similar to LRU but handles sequential scans better and costs less per hit (no list reordering).
 
 ## Async functions
 
-Async functions are detected automatically at decoration time — no special
-syntax needed. Cache lookups still go through the fast Rust path; only cache
-misses `await` the wrapped coroutine.
+Async functions are detected at decoration time - no special syntax needed.
+Cache lookups still go through the Rust path; only cache misses `await` the
+wrapped coroutine.
 
 ```python
 import asyncio
@@ -59,8 +59,8 @@ async def fetch_user(user_id: int) -> dict:
     return {"id": user_id}
 
 async def main():
-    user = await fetch_user(42)   # miss — awaits the coroutine
-    user = await fetch_user(42)   # hit — returns cached result instantly
+    user = await fetch_user(42)   # miss - awaits the coroutine
+    user = await fetch_user(42)   # hit - returns cached result instantly
 
 asyncio.run(main())
 ```
@@ -91,9 +91,9 @@ from warp_cache import cache, Backend
 
 ### Memory backend (default)
 
-The memory backend keeps all cached data in the process's own heap. Keys are stored as live Python objects (no serialization), and lookups go through a single Rust `__call__` — hash, lookup, equality check, and return all happen in one FFI crossing with no copying.
+The memory backend keeps cached data in the process heap. Keys are stored as Python objects directly (no serialization), and lookups go through a single Rust `__call__` - hash, lookup, equality check, and return all happen in one FFI crossing with no copying.
 
-Thread safety is provided by a sharded `hashbrown::HashMap` with GIL-conditional locking — under GIL-enabled Python, `GilCell` provides zero-cost access; under free-threaded Python, per-shard `parking_lot::RwLock` enables true parallel reads. The write lock is acquired only on cache misses for SIEVE eviction.
+Thread safety uses a sharded `hashbrown::HashMap` with GIL-conditional locking - under GIL-enabled Python, `GilCell` has no overhead; under free-threaded Python, per-shard `parking_lot::RwLock` allows parallel reads. Write lock is only taken on cache misses for SIEVE eviction.
 
 ```python
 @cache(max_size=256)  # backend="memory" is the default
@@ -117,15 +117,15 @@ def get_embedding(text: str) -> list[float]:
 **How it works:**
 
 - Two mmap files are created per decorated function:
-  - **Data file** — contains a header, a hash table (open-addressing with linear probing), and a fixed-size slab arena for entries
-  - **Lock file** — holds a seqlock (sequence counter + spinlock) for cross-process synchronization. Reads are optimistic and lock-free; only writes acquire the spinlock
+  - **Data file** - contains a header, a hash table (open-addressing with linear probing), and a fixed-size slab arena for entries
+  - **Lock file** - holds a seqlock (sequence counter + spinlock) for cross-process synchronization. Reads are optimistic (no lock taken); only writes acquire the spinlock
 - File location: `/dev/shm/` on Linux, `$TMPDIR/warp_cache/` on macOS
 - The file name is derived deterministically from the function's `__module__` and `__qualname__`, so the same function in different processes maps to the same cache automatically
 - If an existing cache file has different parameters (capacity, key/value sizes, version), it is recreated
 
 **Serialization overhead:**
 
-Keys and values are serialized using a fast-path binary format for common primitives (None, bool, int, float, str, bytes, flat tuples) with pickle fallback for complex types. This adds per-operation cost compared to the memory backend, which stores live Python objects directly. Expect roughly **2x** lower throughput — the gap is irreducible cross-process overhead: serialization, deterministic hashing, seqlock, and mmap copy. No Mutex is used; all reads are fully lock-free. The shared backend is designed for cases where the cached computation is expensive enough (network I/O, ML inference, heavy math) that the serialization cost is negligible in comparison.
+Keys and values are serialized using a fast-path binary format for common primitives (None, bool, int, float, str, bytes, flat tuples) with pickle fallback for complex types. This adds per-operation cost compared to the memory backend, which stores Python objects directly. Expect roughly 2x lower throughput - the gap is unavoidable cross-process overhead: serialization, deterministic hashing, seqlock, and mmap copy. No Mutex is used; reads don't take any locks. The shared backend makes sense when the cached computation is expensive enough (network I/O, ML inference, heavy math) that serialization cost doesn't matter.
 
 **Size limits:**
 

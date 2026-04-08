@@ -155,6 +155,25 @@ impl SharedCachedFunction {
         }
     }
 
+    /// Cache lookup returning (hit, value) to distinguish cached None from miss.
+    #[pyo3(signature = (*args, **kwargs))]
+    fn _probe<'py>(
+        &self,
+        py: Python<'py>,
+        args: Bound<'py, PyTuple>,
+        kwargs: Option<Bound<'py, PyDict>>,
+    ) -> PyResult<(bool, Py<PyAny>)> {
+        let (key_hash, key_bytes) = self.make_key(py, &args, &kwargs)?;
+
+        match self.cache.get(key_hash, &key_bytes) {
+            ShmGetResult::Hit(vb) => {
+                let value = self.deserialize_value(py, &vb)?;
+                Ok((true, value))
+            }
+            ShmGetResult::Miss => Ok((false, py.None())),
+        }
+    }
+
     /// Store a value in the cache for the given arguments.
     #[pyo3(signature = (value, *args, **kwargs))]
     fn set<'py>(

@@ -48,8 +48,8 @@ class AsyncCachedFunction:
         return args
 
     async def __call__(self, *args: Any, **kwargs: Any) -> Any:
-        cached = self._inner.get(*args, **kwargs)
-        if cached is not None:
+        hit, cached = self._inner._probe(*args, **kwargs)  # type: ignore[unresolved-attribute]
+        if hit:
             return cached
 
         key = self._make_inflight_key(args, kwargs or None)
@@ -58,8 +58,8 @@ class AsyncCachedFunction:
             event = self._inflight.get(key)
             if event is not None:
                 await event.wait()
-                cached = self._inner.get(*args, **kwargs)
-                if cached is not None:
+                hit, cached = self._inner._probe(*args, **kwargs)  # type: ignore[unresolved-attribute]
+                if hit:
                     return cached
                 # Leader failed — loop back to check for a new leader
                 continue

@@ -467,6 +467,39 @@ impl CachedFunction {
         Ok(None)
     }
 
+    /// Cache lookup returning (hit, value) to distinguish cached None from miss.
+    #[pyo3(signature = (*args, **kwargs))]
+    fn _probe<'py>(
+        &self,
+        py: Python<'py>,
+        args: Bound<'py, PyTuple>,
+        kwargs: Option<Bound<'py, PyDict>>,
+    ) -> PyResult<(bool, Py<PyAny>)> {
+        let (hash, key_ptr, _key_owner) = Self::hash_args(py, &args, &kwargs)?;
+        let borrowed = BorrowedArgs { hash, ptr: key_ptr };
+        let shard_idx = hash as usize & self.shard_mask;
+
+        let shard = self.shards[shard_idx].read();
+        if let Some(entry) = shard.map.get(&borrowed) {
+            if let Some(ttl) = self.ttl {
+                if entry.created_at.elapsed() > ttl {
+                    drop(shard);
+                    self.misses.fetch_add(1, Ordering::Relaxed);
+                    return Ok((false, py.None()));
+                }
+            }
+            entry.visited.store(true, Ordering::Relaxed);
+            let val = entry.value.clone_ref(py);
+            drop(shard);
+            self.hits.fetch_add(1, Ordering::Relaxed);
+            return Ok((true, val));
+        }
+
+        drop(shard);
+        self.misses.fetch_add(1, Ordering::Relaxed);
+        Ok((false, py.None()))
+    }
+
     /// Store a value in the cache for the given arguments.
     #[pyo3(signature = (value, *args, **kwargs))]
     fn set<'py>(

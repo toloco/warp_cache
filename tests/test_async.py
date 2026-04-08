@@ -195,6 +195,56 @@ def test_sync_still_works():
     assert info.hits == 1
 
 
+# ── None return value ────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_async_none_return_value():
+    """Verify that async functions returning None are cached correctly."""
+    call_count = 0
+
+    @cache(max_size=128)
+    async def returns_none(x):
+        nonlocal call_count
+        call_count += 1
+        return None
+
+    result = await returns_none(1)
+    assert result is None
+    assert call_count == 1
+
+    result = await returns_none(1)
+    assert result is None
+    assert call_count == 1  # cached, not recomputed
+
+    info = returns_none.cache_info()
+    assert info.hits == 1
+    assert info.misses == 1
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="shared memory is Unix-only")
+@pytest.mark.asyncio
+async def test_async_none_return_value_shared():
+    """Verify that async functions returning None are cached with shared backend."""
+    call_count = 0
+
+    @cache(max_size=128, backend="shared")
+    async def returns_none(x):
+        nonlocal call_count
+        call_count += 1
+        return None
+
+    returns_none.cache_clear()
+
+    result = await returns_none(1)
+    assert result is None
+    assert call_count == 1
+
+    result = await returns_none(1)
+    assert result is None
+    assert call_count == 1  # cached, not recomputed
+
+
 # ── Single-flight (dogpile prevention) ───────────────────────────────────
 
 

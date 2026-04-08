@@ -21,6 +21,10 @@ class AsyncCachedFunction:
 
     Uses the Rust get/set methods for cache lookup/store so that the
     async function is only awaited on cache miss.
+
+    Implements single-flight coalescing: when multiple coroutines miss the
+    cache for the same key concurrently, only one computes the result and
+    the rest wait for it.
     """
 
     def __init__(
@@ -28,19 +32,48 @@ class AsyncCachedFunction:
     ) -> None:
         self._fn = fn
         self._inner = inner
+        self._inflight: dict[Any, asyncio.Event] = {}
         self.__wrapped__ = fn
         self.__name__ = getattr(fn, "__name__", repr(fn))
         self.__qualname__ = getattr(fn, "__qualname__", self.__name__)
         self.__module__ = getattr(fn, "__module__", __name__)
         self.__doc__ = getattr(fn, "__doc__", None)
 
+    @staticmethod
+    def _make_inflight_key(
+        args: tuple[Any, ...], kwargs: dict[str, Any] | None
+    ) -> Any:
+        if kwargs:
+            return (args, tuple(sorted(kwargs.items())))
+        return args
+
     async def __call__(self, *args: Any, **kwargs: Any) -> Any:
         cached = self._inner.get(*args, **kwargs)
         if cached is not None:
             return cached
-        result = await self._fn(*args, **kwargs)
-        self._inner.set(result, *args, **kwargs)
-        return result
+
+        key = self._make_inflight_key(args, kwargs or None)
+
+        while True:
+            event = self._inflight.get(key)
+            if event is not None:
+                await event.wait()
+                cached = self._inner.get(*args, **kwargs)
+                if cached is not None:
+                    return cached
+                # Leader failed — loop back to check for a new leader
+                continue
+
+            # We're the first: register our intent
+            event = asyncio.Event()
+            self._inflight[key] = event
+            try:
+                result = await self._fn(*args, **kwargs)
+                self._inner.set(result, *args, **kwargs)
+                return result
+            finally:
+                event.set()
+                self._inflight.pop(key, None)
 
     def cache_info(self) -> CacheInfo | SharedCacheInfo:
         return self._inner.cache_info()

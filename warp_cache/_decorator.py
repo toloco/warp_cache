@@ -1,9 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 import warnings
 from collections.abc import Callable
 from typing import Any, TypeVar
+
+if sys.version_info >= (3, 10):
+    from typing import ParamSpec, Protocol, runtime_checkable
+else:
+    from typing_extensions import ParamSpec, Protocol, runtime_checkable
 
 from warp_cache._strategies import Backend
 from warp_cache._warp_cache_rs import (
@@ -14,6 +20,30 @@ from warp_cache._warp_cache_rs import (
 )
 
 F = TypeVar("F", bound=Callable[..., Any])
+P = ParamSpec("P")
+R = TypeVar("R")
+
+
+@runtime_checkable
+class BaseCacheInfo(Protocol):
+    """Common interface for cache info objects from both backends."""
+
+    @property
+    def hits(self) -> int: ...
+    @property
+    def misses(self) -> int: ...
+    @property
+    def max_size(self) -> int: ...
+    @property
+    def current_size(self) -> int: ...
+
+
+class CachedCallable(Protocol[P, R]):
+    """Protocol for a cached function — preserves the original call signature."""
+
+    def __call__(self, *args: P.args, **kwargs: P.kwargs) -> R: ...
+    def cache_info(self) -> BaseCacheInfo: ...
+    def cache_clear(self) -> None: ...
 
 
 class AsyncCachedFunction:
@@ -48,7 +78,7 @@ class AsyncCachedFunction:
         return args
 
     async def __call__(self, *args: Any, **kwargs: Any) -> Any:
-        hit, cached = self._inner._probe(*args, **kwargs)  # type: ignore[unresolved-attribute]
+        hit, cached = self._inner._probe(*args, **kwargs)
         if hit:
             return cached
 
@@ -58,7 +88,7 @@ class AsyncCachedFunction:
             event = self._inflight.get(key)
             if event is not None:
                 await event.wait()
-                hit, cached = self._inner._probe(*args, **kwargs)  # type: ignore[unresolved-attribute]
+                hit, cached = self._inner._probe(*args, **kwargs)
                 if hit:
                     return cached
                 # Leader failed — loop back to check for a new leader
@@ -108,7 +138,7 @@ def cache(
     backend: str | int | Backend = Backend.MEMORY,
     max_key_size: int | None = None,
     max_value_size: int | None = None,
-) -> Callable[[F], F]:
+) -> Callable[[Callable[P, R]], CachedCallable[P, R]]:
     """Caching decorator backed by a Rust store.
 
     Supports both sync and async functions. The async detection happens
@@ -128,7 +158,7 @@ def cache(
     """
     resolved_backend = _resolve_backend(backend)
 
-    def decorator(fn: F) -> F:
+    def decorator(fn: Callable[P, R]) -> CachedCallable[P, R]:
         if resolved_backend == Backend.SHARED:
             inner = SharedCachedFunction(
                 fn,
@@ -153,6 +183,6 @@ def cache(
         if asyncio.iscoroutinefunction(fn):
             return AsyncCachedFunction(fn, inner)  # type: ignore[return-value]
 
-        return inner  # type: ignore[return-value]
+        return inner
 
     return decorator

@@ -133,8 +133,8 @@ Each entry has a fixed slot size determined at creation time. Keys and values th
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `max_key_size` | `512` bytes | Maximum pickle size of the key (args tuple) |
-| `max_value_size` | `4096` bytes | Maximum pickle size of the return value |
+| `max_key_size` | `512` bytes | Maximum serialized size of the key (args tuple) |
+| `max_value_size` | `4096` bytes | Maximum serialized size of the return value |
 
 ```python
 # Large values: increase max_value_size
@@ -184,6 +184,60 @@ def work(x):
 with ThreadPoolExecutor(max_workers=8) as pool:
     results = list(pool.map(work, range(100)))
 ```
+
+## Key serialization behavior
+
+### How cache keys are formed
+
+Both backends build the cache key from `*args` and `**kwargs`:
+
+- **No kwargs (common path):** The `args` tuple is used directly as the key.
+- **With kwargs:** Keywords are sorted by name to ensure deterministic ordering,
+  then combined with args as `(args, tuple(sorted(kwargs.items())))`. This means
+  `fn(a=1, b=2)` and `fn(b=2, a=1)` always hit the same cache entry.
+
+Arguments must be **hashable** (memory backend) or **serializable** (shared backend).
+
+### Memory backend
+
+Keys are stored as Python objects on the heap — no serialization. Lookups use
+Python's built-in `hash()` and `==` via the C API. This is fast but means the
+cache is inherently single-process (Python object pointers are not meaningful
+across processes).
+
+### Shared backend
+
+Keys and values are serialized to bytes before storage. The serialization uses a
+**fast-path binary format** for common primitive types, falling back to **pickle**
+for everything else:
+
+| Type | Format | Size |
+|------|--------|------|
+| `None` | Tag byte | 1 byte |
+| `bool` | Tag byte | 1 byte |
+| `int` (fits i64) | Tag + little-endian i64 | 9 bytes |
+| `float` | Tag + IEEE 754 f64 | 9 bytes |
+| `str` | Tag + 4-byte length + UTF-8 | 5 + len bytes |
+| `bytes` | Tag + 4-byte length + data | 5 + len bytes |
+| Flat tuple of above | Tag + count + elements | varies |
+| Everything else | Pickle (protocol 5) | varies |
+
+The fast-path avoids pickle overhead entirely for the most common argument types.
+Large integers (outside i64 range), nested structures, dicts, sets, and custom
+objects fall back to pickle automatically.
+
+### Cross-process determinism
+
+The shared backend must ensure that the same function arguments produce the same
+cache key in every process. Python's `hash()` is randomized per-process
+(`PYTHONHASHSEED`), so the shared backend does **not** use it. Instead:
+
+1. Keys are serialized to a deterministic byte sequence (the binary format above)
+2. The bytes are hashed with **ahash** using fixed seeds (same seeds in every process)
+3. Lookups verify matches using byte-level comparison (`memcmp`), not Python equality
+
+This makes the shared backend completely immune to `PYTHONHASHSEED` — different
+processes with different hash seeds will always agree on cache entries.
 
 ## Decorator parameters
 

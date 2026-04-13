@@ -24,6 +24,9 @@ classifiers = [
     "Programming Language :: Rust",
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
+dependencies = [
+    "typing_extensions>=4.0; python_version < '3.10'",
+]
 
 [dependency-groups]
 dev = [

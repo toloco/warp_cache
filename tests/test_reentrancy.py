@@ -114,3 +114,30 @@ def test_reentry_via_get_set_probe_is_safe():
     f(K(lambda: f._probe(K(lambda: None))))
     # Reaching here without crashing or hanging is the assertion.
     assert f.cache_info().current_size <= 8
+
+
+def test_reentry_via_clear_and_info_is_safe():
+    """cache_clear()/cache_info() called from inside a key __eq__ must bypass
+    safely instead of aliasing the outer borrow."""
+
+    @cache(max_size=8)
+    def f(key):
+        return 1
+
+    class K:
+        def __init__(self, action):
+            self.action = action
+
+        def __hash__(self):
+            return 0
+
+        def __eq__(self, other):
+            self.action()
+            return self is other
+
+    f(K(lambda: None))  # prime
+    f(K(lambda: f.cache_clear()))
+    info_during = []
+    f(K(lambda: info_during.append(f.cache_info())))
+    # No crash/deadlock == pass. Reentrant cache_info reports current_size 0.
+    assert info_during and info_during[0].current_size == 0

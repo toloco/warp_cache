@@ -673,6 +673,19 @@ impl CachedFunction {
     }
 
     fn cache_info(&self) -> CacheInfo {
+        // If reentrant, we cannot safely read the shards; report counters only.
+        let _enter = match self.try_enter() {
+            Some(g) => g,
+            None => {
+                return CacheInfo {
+                    hits: self.hits.load(Ordering::Relaxed),
+                    misses: self.misses.load(Ordering::Relaxed),
+                    max_size: self.max_size,
+                    current_size: 0,
+                };
+            }
+        };
+
         let mut current_size = 0;
         for shard in self.shards.iter() {
             current_size += shard.read().map.len();
@@ -686,6 +699,12 @@ impl CachedFunction {
     }
 
     fn cache_clear(&self) {
+        // If reentrant, skip rather than alias the outer borrow.
+        let _enter = match self.try_enter() {
+            Some(g) => g,
+            None => return,
+        };
+
         for shard in self.shards.iter() {
             let mut s = shard.write();
             s.map.clear();

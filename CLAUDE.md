@@ -1,73 +1,179 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Guidance for Claude Code (claude.ai/code) when working in this repository.
 
-## Project Overview
+**warp_cache** is a thread-safe Python caching decorator backed by a Rust extension
+(PyO3 + maturin): SIEVE eviction, TTL support, async awareness, and a cross-process
+shared-memory backend. For internals see [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md);
+for contributor process see [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
-**warp_cache** - a thread-safe Python caching decorator backed by a Rust extension (PyO3 + maturin). Uses SIEVE eviction, with TTL support, async awareness, and a cross-process shared memory backend.
+---
 
-## Build & Test Commands
+## Golden rules (non-negotiable)
+
+Every change flows through the same pipeline:
+
+> **issue → branch → implement + tests → full check gate → PR → human review**
+
+- **Never start coding without an approved GitHub issue** (see Step 0).
+- **Never commit or push to `master`.** Work on a branch, always.
+- **Never merge.** Open the PR and hand it to a human. You stop at "review requested".
+- **Never claim a gate passed without running it** and showing the output.
+
+The default branch is **`master`**. `gh` CLI is available and authenticated.
+
+---
+
+## The workflow
+
+### 0 · Start from an issue
+
+Work begins from a GitHub issue. If the user references one, read it
+(`gh issue view <N>`). If none exists, **do not start coding** — instead either:
+
+- **Draft one** with `gh issue create`, then show it to the user and get explicit
+  approval before writing any code, **or**
+- **Ask** the user to point you to / create the issue.
+
+The issue defines scope. If the work drifts from it, stop and re-confirm.
+
+### 1 · Branch from `master`
 
 ```bash
-make setup              # Create venv + install dev deps (uv sync --dev)
-make build              # Build Rust extension (release, via maturin)
-make build-debug        # Build Rust extension (debug, faster compile)
-make test               # Build + run all tests
-make test-only          # Run tests without rebuilding
-make fmt                # Format Python (ruff) + Rust (cargo fmt)
-make lint               # Lint Python (ruff) + Rust (cargo clippy)
-make all                # Format, lint, test
+git switch master && git pull
+git switch -c <type>/<issue#>-<slug>   # e.g. fix/123-async-none-caching
 ```
 
-**Run a single test:**
+Branch prefix matches the change type: `feat/`, `fix/`, `perf/`, `docs/`, `refactor/`.
+
+### 2 · Implement
+
+- **Tests are required** for any new behavior or bug fix (writing them first is
+  encouraged but not mandatory). A bug fix should include a test that fails before the
+  fix and passes after.
+- Follow existing patterns. Keep the change focused on the issue's scope.
+- If the **public API** changes, update `README.md`, `docs/`, `llms.txt`, and
+  `llms-full.txt` to match.
+- If **architecture/invariants** change, update [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+
+### 3 · Quality gate
+
+Run the gate (next section) and **block the PR on any failure**. Report the actual
+command output — don't assert success without evidence.
+
+### 4 · Commit
+
+Use **Conventional Commits** and end every commit message with the trailer:
+
+```
+<type>: <imperative summary>      # feat / fix / perf / docs / refactor / test / chore
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+```
+
+### 5 · Open the PR and request review
+
 ```bash
+git push -u origin HEAD
+gh pr create --base master --fill   # then edit the body
+```
+
+The PR body must:
+- Link the issue with **`Closes #<N>`**.
+- Summarize **what** changed and **why** (and call out any perf/behavioral impact).
+- Note which gates were run (and matrix/bench results for risky changes).
+
+End the PR body with:
+
+```
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+```
+
+Then **stop** — the human reviews and merges.
+
+---
+
+## Quality gate reference
+
+Run in order before opening a PR. Any failure blocks the PR.
+
+| Step | Command | Checks |
+|------|---------|--------|
+| Format | `make fmt` | ruff format + `--fix`, `cargo fmt` |
+| Lint | `make lint` | ruff check, `ty` type-check, `cargo clippy -- -D warnings` |
+| Test | `make test` | builds the extension, runs `cargo test` + full pytest suite |
+
+**`make all`** runs fmt + lint + test in one shot.
+
+### Risky changes — also run matrix + benchmarks
+
+A change is **risky** if it touches any of:
+
+- Rust core: `src/store.rs`, `src/shared_store.rs`, `src/key.rs`, `src/serde.rs`, `src/shm/`
+- Hashing, key equality, or the passthrough hasher
+- Anything `unsafe`, FFI / PyO3 boundary, or locking
+- `#[repr(C)]` layout / `size_of` assertions in `layout.rs`
+
+For risky changes, additionally run and report:
+
+```bash
+make test-matrix -j     # Python 3.9–3.14
+make bench              # or: make bench-sieve  for eviction-quality changes
+```
+
+CI also runs lint, clippy (incl. Windows), and the full OS/Python test matrix on every
+PR — but the gate above must pass locally first.
+
+---
+
+## Build & test commands
+
+```bash
+make setup            # venv + dev deps (uv sync --dev)
+make build            # build Rust extension (release)
+make build-debug      # build Rust extension (debug, faster compile)
+make test             # build + cargo test + pytest
+make test-only        # pytest without rebuilding
+make test PYTHON=3.13 # specific Python version
+make fmt / make lint  # format / lint (Python + Rust)
+make bench            # benchmarks for current Python
+
+# Run a single test:
 uv run pytest tests/test_basic.py::test_cache_hit -v
 ```
 
-**Test across Python versions:**
-```bash
-make test-matrix -j     # Parallel across 3.9-3.14
-make test PYTHON=3.13   # Specific version
-```
+---
 
-## Architecture
+## Code map
 
-### Rust core (`src/`)
+Where things live (full detail in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)):
 
-- **`lib.rs`** - PyO3 module entry, exports `CachedFunction`, `SharedCachedFunction`, info types
-- **`store.rs`** - In-process backend: `CachedFunction` uses sharded `hashbrown::HashMap` with passthrough hasher (avoids re-hashing Python's precomputed hash) + GIL-conditional locking (`GilCell` under GIL for zero-cost, `parking_lot::RwLock` under free-threaded Python). The `__call__` hot path uses `BorrowedArgs` to look up via borrowed pointer (no `CacheKey` allocation on hits), with `CacheKey` only materialized on cache miss for storage
-- **`serde.rs`** - Fast-path binary serialization for common primitives (None, bool, int, float, str, bytes, flat tuples); avoids pickle overhead for the shared backend
-- **`shared_store.rs`** - Cross-process backend: `SharedCachedFunction` holds `ShmCache` directly (no Mutex), with cached `max_key_size`/`max_value_size` fields and a pre-built `ahash::RandomState`. Serializes via serde.rs (with pickle fallback), stores in mmap'd shared memory
-- **`entry.rs`** - `SieveEntry` { value, created_at, visited }
-- **`key.rs`** - `CacheKey` wraps `Py<PyAny>` + precomputed hash; uses raw `ffi::PyObject_RichCompareBool` for equality. Also provides `BorrowedArgs` (zero-alloc borrowed key for hit-path lookups via hashbrown's `Equivalent` trait)
-- **`shm/`** - Shared memory infrastructure:
-  - `mod.rs` - `ShmCache`: create/open, get/set with serialized bytes. Uses interior mutability (`&self` methods): reads are lock-free (seqlock), writes acquire seqlock internally. `next_unique_id` is `AtomicU64`
-  - `layout.rs` - Header + SlotHeader structs, memory offsets
-  - `region.rs` - `ShmRegion`: mmap file management (`$TMPDIR/warp_cache/{name}.data` + `{name}.lock`)
-  - `lock.rs` - `ShmSeqLock`: seqlock (optimistic reads + TTAS spinlock) in shared memory
-  - `hashtable.rs` - Open-addressing with linear probing (power-of-2 capacity, bitmask)
-  - `ordering.rs` - SIEVE eviction: intrusive linked list + `sieve_evict()` hand scan
+| Path | Responsibility |
+|------|----------------|
+| `src/lib.rs` | PyO3 module entry; exports `CachedFunction`, `SharedCachedFunction` |
+| `src/store.rs` | In-process backend (sharded hashbrown, GIL-conditional locking, hot `__call__`) |
+| `src/shared_store.rs` | Cross-process backend over mmap'd shared memory |
+| `src/serde.rs` | Fast-path binary serialization (pickle fallback) |
+| `src/key.rs` | `CacheKey` + zero-alloc `BorrowedArgs` hit-path lookup |
+| `src/entry.rs` | `SieveEntry` |
+| `src/shm/` | Shared-memory infra: layout, mmap region, seqlock, hashtable, SIEVE ordering |
+| `warp_cache/_decorator.py` | `cache()` factory; async detection + `AsyncCachedFunction` wrapper |
+| `warp_cache/_strategies.py` | `Backend(IntEnum)`: MEMORY=0, SHARED=1 |
+| `tests/` | pytest suite |
+| `benchmarks/` | performance + SIEVE-quality benchmarks |
 
-### Python layer (`warp_cache/`)
+## Critical invariants (full list in ARCHITECTURE.md)
 
-- **`_decorator.py`** - `cache()` factory: dispatches to `CachedFunction` (memory) or `SharedCachedFunction` (shared). Auto-detects async functions and wraps with `AsyncCachedFunction` (cache hit in Rust, only misses `await` the coroutine)
-- **`_strategies.py`** - `Backend(IntEnum)`: MEMORY=0, SHARED=1
+These two are cheap to violate and easy to miss in review:
 
-### Key design decisions
-
-- **Single FFI crossing**: entire cache lookup happens in Rust `__call__`, no Python wrapper overhead
-- **Release profile**: fat LTO + `codegen-units=1` for cross-crate inlining of PyO3 wrappers
-- **SIEVE eviction**: unified across both backends. On hit, sets `visited=1` (single-word store). On evict, hand scans for unvisited entry. Lock-free reads on both backends
-- **Thread safety**: GIL-conditional locking - `GilCell` (zero-cost `UnsafeCell` wrapper) under GIL-enabled Python, `parking_lot::RwLock` under free-threaded Python (`#[cfg(Py_GIL_DISABLED)]`). Shared backend uses seqlock (optimistic reads + TTAS spinlock) - no Mutex. Under free-threaded Python, per-shard `RwLock` enables true parallel reads across cores
-- **Borrowed key lookup**: hit path uses `BorrowedArgs` (raw pointer + precomputed hash) via hashbrown's `Equivalent` trait - no `CacheKey` allocation, no refcount churn on hits
-- **Passthrough hasher**: `PassthroughHasher` feeds Python's precomputed hash directly to hashbrown, avoiding foldhash re-hashing (~1-2ns saved per lookup). Shard count is power-of-2 for bitmask indexing
-
-## Critical Invariants
-
-- **Hash table capacity must be power-of-2** - bitmask probing uses `hash & (capacity - 1)`. Always use `.next_power_of_two()`
-- **`#[repr(C)]` struct field ordering** - place u64 fields before u32 to avoid implicit alignment padding; affects `size_of` assertions in layout.rs
+- **Hash table capacity must be power-of-2** — probing uses `hash & (capacity - 1)`.
+  Always `.next_power_of_two()`.
+- **`#[repr(C)]` field ordering** — u64 fields before u32 to avoid alignment padding;
+  affects `size_of` assertions in `layout.rs`.
 
 ## Linting
 
-- Python: ruff (rules: E, F, W, I, UP, B, SIM; line-length=100; target py39)
-- Rust: `cargo clippy -- -D warnings`
+- **Python**: ruff (rules `E, F, W, I, UP, B, SIM`; line-length 100; target py39) + `ty`.
+- **Rust**: `cargo fmt`, `cargo clippy -- -D warnings`.
+
+`make fmt` and `make lint` handle both languages.

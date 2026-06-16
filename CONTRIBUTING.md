@@ -18,7 +18,7 @@ make test-only    # Run the test suite
 
 ### Making Changes
 
-1. Create a branch from `main` for your work.
+1. Create a branch from `master` for your work.
 2. Make your changes, keeping commits focused and well-described.
 3. Add or update tests for any new or changed functionality.
 4. Run the full check suite before submitting:

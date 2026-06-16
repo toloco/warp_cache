@@ -99,8 +99,6 @@ impl hashbrown::Equivalent<CacheKey> for BorrowedArgs {
         // call stack) and `key.key_obj` is an owned reference in the map. The
         // arbitrary Python __eq__ this runs may re-enter; CachedFunction's
         // reentrancy guard prevents a second, aliasing shard guard (issue #30).
-        unsafe {
-            ffi::PyObject_RichCompareBool(self.ptr, key.key_obj.as_ptr(), ffi::Py_EQ) == 1
-        }
+        unsafe { ffi::PyObject_RichCompareBool(self.ptr, key.key_obj.as_ptr(), ffi::Py_EQ) == 1 }
     }
 }

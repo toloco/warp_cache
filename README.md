@@ -154,6 +154,8 @@ If no wheel is available for your platform, pip will fall back to the source dis
 
 **Why sharded HashMap?** Under free-threaded Python, per-shard `RwLock` lets different threads read from different shards in parallel. Shard count is power-of-2 (selected via `hash & shard_mask`) for bitmask indexing.
 
+**Reentrant keys.** A lookup runs your key's `__eq__`/`__hash__` while a shard is borrowed. If that code calls back into the *same* cached function, that reentrant call is computed but **not cached** — it bypasses the cache to stay memory-safe (it would otherwise alias the live borrow on GIL builds or deadlock on free-threaded builds; see [#30](https://github.com/toloco/warp_cache/issues/30)). Ordinary recursion (`@cache def fib(n): ...`) is unaffected — it re-enters outside any borrow and caches normally.
+
 **Why seqlock for shared memory?** Cross-process synchronization can't use futexes portably. The seqlock does optimistic reads (just check a sequence counter) with a TTAS spinlock for writes - all in userspace, no kernel calls on the read side.
 
 ## Status

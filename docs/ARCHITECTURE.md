@@ -68,3 +68,14 @@ For day-to-day workflow and commands, see [`CLAUDE.md`](../CLAUDE.md) and
   `hash & (capacity - 1)`. Always use `.next_power_of_two()`.
 - **`#[repr(C)]` struct field ordering** — place u64 fields before u32 to avoid implicit
   alignment padding; affects `size_of` assertions in `layout.rs`.
+- **No second shard guard while one is live (reentrancy, issue #30).** A memory-backend
+  lookup runs arbitrary Python `__eq__` (via `PyObject_RichCompareBool`) *while a shard guard
+  is held*. That `__eq__` can re-enter the same `CachedFunction` (or, on GIL builds, hand off
+  the GIL to another thread that calls in) and take a second, conflicting guard — aliasing
+  `&Shard` with `&mut Shard` (UB) on GIL builds, or deadlocking the `RwLock` on free-threaded
+  builds. `CachedFunction::try_enter` marks the function active for the duration of each borrow
+  region; an entrant that finds it already active **bypasses the cache and recomputes** (and
+  must never take a shard guard). The wrapped function is always invoked *outside* this guard,
+  so recursive `@cache` functions still cache. GIL builds use a single GIL-serialized flag;
+  free-threaded builds use a per-thread set of active function addresses. The shared backend is
+  unaffected (key comparison is by serialized bytes, never Python `__eq__`).

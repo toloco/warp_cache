@@ -569,23 +569,25 @@ impl CachedFunction {
         let borrowed = BorrowedArgs { hash, ptr: key_ptr };
         let shard_idx = hash as usize & self.shard_mask;
 
-        let shard = self.shards[shard_idx].read();
-        if let Some(entry) = shard.map.get(&borrowed) {
-            if let Some(ttl) = self.ttl {
-                if entry.created_at.elapsed() > ttl {
-                    drop(shard);
-                    self.misses.fetch_add(1, Ordering::Relaxed);
-                    return Ok(None);
+        // Reentrant calls bypass (report miss) rather than take a second guard.
+        if let Some(_enter) = self.try_enter() {
+            let shard = self.shards[shard_idx].read();
+            if let Some(entry) = shard.map.get(&borrowed) {
+                if let Some(ttl) = self.ttl {
+                    if entry.created_at.elapsed() > ttl {
+                        drop(shard);
+                        self.misses.fetch_add(1, Ordering::Relaxed);
+                        return Ok(None);
+                    }
                 }
+                entry.visited.store(true, Ordering::Relaxed);
+                let val = entry.value.clone_ref(py);
+                drop(shard);
+                self.hits.fetch_add(1, Ordering::Relaxed);
+                return Ok(Some(val));
             }
-            entry.visited.store(true, Ordering::Relaxed);
-            let val = entry.value.clone_ref(py);
-            drop(shard);
-            self.hits.fetch_add(1, Ordering::Relaxed);
-            return Ok(Some(val));
         }
 
-        drop(shard);
         self.misses.fetch_add(1, Ordering::Relaxed);
         Ok(None)
     }
@@ -602,23 +604,25 @@ impl CachedFunction {
         let borrowed = BorrowedArgs { hash, ptr: key_ptr };
         let shard_idx = hash as usize & self.shard_mask;
 
-        let shard = self.shards[shard_idx].read();
-        if let Some(entry) = shard.map.get(&borrowed) {
-            if let Some(ttl) = self.ttl {
-                if entry.created_at.elapsed() > ttl {
-                    drop(shard);
-                    self.misses.fetch_add(1, Ordering::Relaxed);
-                    return Ok((false, py.None()));
+        // Reentrant calls bypass (report miss).
+        if let Some(_enter) = self.try_enter() {
+            let shard = self.shards[shard_idx].read();
+            if let Some(entry) = shard.map.get(&borrowed) {
+                if let Some(ttl) = self.ttl {
+                    if entry.created_at.elapsed() > ttl {
+                        drop(shard);
+                        self.misses.fetch_add(1, Ordering::Relaxed);
+                        return Ok((false, py.None()));
+                    }
                 }
+                entry.visited.store(true, Ordering::Relaxed);
+                let val = entry.value.clone_ref(py);
+                drop(shard);
+                self.hits.fetch_add(1, Ordering::Relaxed);
+                return Ok((true, val));
             }
-            entry.visited.store(true, Ordering::Relaxed);
-            let val = entry.value.clone_ref(py);
-            drop(shard);
-            self.hits.fetch_add(1, Ordering::Relaxed);
-            return Ok((true, val));
         }
 
-        drop(shard);
         self.misses.fetch_add(1, Ordering::Relaxed);
         Ok((false, py.None()))
     }
@@ -635,31 +639,34 @@ impl CachedFunction {
         let cache_key = Self::make_key(py, &args, &kwargs)?;
         let shard_idx = cache_key.shard_index(self.shard_mask);
 
-        let mut shard = self.shards[shard_idx].write();
+        // Reentrant calls skip the store rather than take a second guard.
+        if let Some(_enter) = self.try_enter() {
+            let mut shard = self.shards[shard_idx].write();
 
-        if shard.map.get(&cache_key).is_none() {
-            // New key: evict if needed, then insert
-            while shard.map.len() >= shard.capacity {
-                Self::evict_one(&mut shard);
-                if shard.order.is_empty() {
-                    break;
+            if shard.map.get(&cache_key).is_none() {
+                // New key: evict if needed, then insert
+                while shard.map.len() >= shard.capacity {
+                    Self::evict_one(&mut shard);
+                    if shard.order.is_empty() {
+                        break;
+                    }
                 }
+                let entry = SieveEntry {
+                    value: value.clone_ref(py),
+                    created_at: Instant::now(),
+                    visited: AtomicBool::new(false),
+                };
+                shard.map.insert(cache_key.clone(), entry);
+                shard.order.push_back(cache_key);
+            } else {
+                // Existing key: update value in place
+                let entry = SieveEntry {
+                    value: value.clone_ref(py),
+                    created_at: Instant::now(),
+                    visited: AtomicBool::new(false),
+                };
+                shard.map.insert(cache_key, entry);
             }
-            let entry = SieveEntry {
-                value: value.clone_ref(py),
-                created_at: Instant::now(),
-                visited: AtomicBool::new(false),
-            };
-            shard.map.insert(cache_key.clone(), entry);
-            shard.order.push_back(cache_key);
-        } else {
-            // Existing key: update value in place
-            let entry = SieveEntry {
-                value: value.clone_ref(py),
-                created_at: Instant::now(),
-                visited: AtomicBool::new(false),
-            };
-            shard.map.insert(cache_key, entry);
         }
 
         Ok(())

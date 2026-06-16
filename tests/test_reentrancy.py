@@ -87,3 +87,30 @@ def test_reentrant_call_returns_correct_value():
     probe = K(2, reenter=K(3))
     assert f(probe) == 20
     assert probe.result == 30
+
+
+def test_reentry_via_get_set_probe_is_safe():
+    """A key __eq__ that re-enters through get/set/_probe during a lookup must
+    bypass safely (no crash / no deadlock)."""
+
+    @cache(max_size=8)
+    def f(key):
+        return 1
+
+    class K:
+        def __init__(self, action):
+            self.action = action
+
+        def __hash__(self):
+            return 0
+
+        def __eq__(self, other):
+            self.action()  # re-enter through another entry point during probe
+            return self is other
+
+    f(K(lambda: None))  # prime with a hash-0 key so later probes collide
+    f(K(lambda: f.get(K(lambda: None))))
+    f(K(lambda: f.set(99, K(lambda: None))))
+    f(K(lambda: f._probe(K(lambda: None))))
+    # Reaching here without crashing or hanging is the assertion.
+    assert f.cache_info().current_size <= 8

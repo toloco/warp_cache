@@ -46,7 +46,10 @@ impl PartialEq for CacheKey {
             return false;
         }
         // SAFETY: PartialEq is only called from HashMap lookups inside
-        // #[pymethods] (__call__, cache_clear), so the GIL is always held.
+        // #[pymethods], so the GIL is always held. The arbitrary Python __eq__
+        // this can run may re-enter the cache or hand off the GIL; CachedFunction
+        // serializes that via its reentrancy guard (try_enter, see issue #30), so
+        // no aliasing/reentrant shard guard is taken during this comparison.
         // This is the same direct C API call that lru_cache uses.
         unsafe {
             ffi::PyObject_RichCompareBool(self.key_obj.as_ptr(), other.key_obj.as_ptr(), ffi::Py_EQ)
@@ -93,7 +96,9 @@ impl hashbrown::Equivalent<CacheKey> for BorrowedArgs {
         }
         // SAFETY: Called only inside #[pymethods] where the GIL is held.
         // `self.ptr` points to a live Python object (the args tuple on the
-        // call stack) and `key.key_obj` is an owned reference in the map.
+        // call stack) and `key.key_obj` is an owned reference in the map. The
+        // arbitrary Python __eq__ this runs may re-enter; CachedFunction's
+        // reentrancy guard prevents a second, aliasing shard guard (issue #30).
         unsafe {
             ffi::PyObject_RichCompareBool(self.ptr, key.key_obj.as_ptr(), ffi::Py_EQ) == 1
         }

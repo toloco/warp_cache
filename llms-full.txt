@@ -150,6 +150,8 @@ with ThreadPoolExecutor(max_workers=8) as pool:
     results = list(pool.map(work, range(100)))
 ```
 
+Reentrant keys: a lookup runs your key's `__eq__`/`__hash__` while a shard is borrowed. If that code calls back into the *same* cached function, the reentrant call is computed but not cached (it bypasses the cache to stay memory-safe; see issue #30). Ordinary recursion is unaffected and caches normally.
+
 ### Shared memory backend (cross-process)
 
 Cached data is shared across processes via mmap. Useful for Gunicorn workers, Celery tasks, or multiprocessing pools.

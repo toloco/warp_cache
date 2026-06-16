@@ -139,6 +139,77 @@ impl<T> DerefMut for GilWriteGuard<'_, T> {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Reentrancy guard (issue #30).
+//
+// A cache lookup holds a shard guard across hashbrown probing, which invokes
+// Python `__eq__` via `PyObject_RichCompareBool`. That Python code can (a)
+// re-enter the SAME CachedFunction on this thread, or (b) yield the GIL to
+// another thread that calls in — either way taking a second, conflicting shard
+// guard. On GIL builds that aliases `&Shard` with `&mut Shard` (UB + possible
+// use-after-free if the table reallocates); on free-threaded builds the
+// same-thread reentrant lock deadlocks.
+//
+// `try_enter` marks the function active for the duration of ONE borrow region.
+// Any entrant that finds it already active bypasses the cache. The wrapped
+// function is always called OUTSIDE this guard, so ordinary recursion
+// (e.g. `@cache fib`) is unaffected.
+// ---------------------------------------------------------------------------
+
+// GIL builds: one non-atomic flag, serialized by the GIL exactly like GilCell.
+// While the flag is set, any other entrant (reentrant, OR a thread the GIL was
+// handed to mid-`__eq__`) bypasses, so two guards never coexist on one shard.
+#[cfg(not(Py_GIL_DISABLED))]
+struct ReentryCell(UnsafeCell<bool>);
+
+#[cfg(not(Py_GIL_DISABLED))]
+unsafe impl Sync for ReentryCell {}
+
+#[cfg(not(Py_GIL_DISABLED))]
+impl ReentryCell {
+    fn new() -> Self {
+        ReentryCell(UnsafeCell::new(false))
+    }
+}
+
+#[cfg(not(Py_GIL_DISABLED))]
+struct EnterGuard<'a>(&'a UnsafeCell<bool>);
+
+#[cfg(not(Py_GIL_DISABLED))]
+impl Drop for EnterGuard<'_> {
+    #[inline(always)]
+    fn drop(&mut self) {
+        // SAFETY: GIL held; access serialized.
+        unsafe { *self.0.get() = false }
+    }
+}
+
+// Free-threaded builds: a per-thread set of active CachedFunction addresses.
+// Cross-thread access is handled by the real parking_lot::RwLock; this guard
+// only prevents same-thread reentry (which would deadlock that RwLock).
+#[cfg(Py_GIL_DISABLED)]
+thread_local! {
+    static ACTIVE: std::cell::RefCell<Vec<usize>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+#[cfg(Py_GIL_DISABLED)]
+struct EnterGuard {
+    id: usize,
+}
+
+#[cfg(Py_GIL_DISABLED)]
+impl Drop for EnterGuard {
+    #[inline]
+    fn drop(&mut self) {
+        ACTIVE.with(|a| {
+            let mut v = a.borrow_mut();
+            if let Some(pos) = v.iter().rposition(|&x| x == self.id) {
+                v.swap_remove(pos);
+            }
+        });
+    }
+}
+
 struct Shard {
     map: HashMap<CacheKey, SieveEntry, PassthroughBuildHasher>,
     order: VecDeque<CacheKey>,
@@ -177,6 +248,8 @@ pub struct CachedFunction {
     max_size: usize,
     hits: AtomicU64,
     misses: AtomicU64,
+    #[cfg(not(Py_GIL_DISABLED))]
+    reentry: ReentryCell,
 }
 
 impl CachedFunction {
@@ -293,6 +366,41 @@ impl CachedFunction {
             }
         }
     }
+
+    /// Mark this function active for one borrow region. Returns `None` if it is
+    /// already active (reentrant call / GIL handed off mid-`__eq__`), in which
+    /// case the caller must bypass the cache. The returned guard clears the
+    /// marker on drop. See issue #30.
+    #[cfg(not(Py_GIL_DISABLED))]
+    #[inline(always)]
+    fn try_enter(&self) -> Option<EnterGuard<'_>> {
+        let p = self.reentry.0.get();
+        // SAFETY: GIL held; access serialized. No reference is held across any
+        // Python call — we read then write a bool by value.
+        unsafe {
+            if *p {
+                None
+            } else {
+                *p = true;
+                Some(EnterGuard(&self.reentry.0))
+            }
+        }
+    }
+
+    #[cfg(Py_GIL_DISABLED)]
+    #[inline]
+    fn try_enter(&self) -> Option<EnterGuard> {
+        let id = self as *const Self as usize;
+        ACTIVE.with(|a| {
+            let mut v = a.borrow_mut();
+            if v.contains(&id) {
+                None
+            } else {
+                v.push(id);
+                Some(EnterGuard { id })
+            }
+        })
+    }
 }
 
 #[pymethods]
@@ -338,6 +446,8 @@ impl CachedFunction {
             max_size,
             hits: AtomicU64::new(0),
             misses: AtomicU64::new(0),
+            #[cfg(not(Py_GIL_DISABLED))]
+            reentry: ReentryCell::new(),
         }
     }
 
@@ -353,80 +463,93 @@ impl CachedFunction {
         let borrowed = BorrowedArgs { hash, ptr: key_ptr };
         let shard_idx = hash as usize & self.shard_mask;
 
-        // FAST PATH: read lock on one shard, lookup via BorrowedArgs
-        {
-            let shard = self.shards[shard_idx].read();
-            if let Some(entry) = shard.map.get(&borrowed) {
-                if let Some(ttl) = self.ttl {
-                    if entry.created_at.elapsed() <= ttl {
+        // FAST PATH: read lock on one shard, guarded against reentrancy.
+        // `entered` is false when this call is reentrant (a key's __eq__/__hash__
+        // ran inside a live borrow of this same cache, or the GIL was handed off
+        // mid-comparison). Such calls bypass the cache and recompute. See #30.
+        let entered = match self.try_enter() {
+            Some(_enter) => {
+                let shard = self.shards[shard_idx].read();
+                if let Some(entry) = shard.map.get(&borrowed) {
+                    if let Some(ttl) = self.ttl {
+                        if entry.created_at.elapsed() <= ttl {
+                            entry.visited.store(true, Ordering::Relaxed);
+                            let val = entry.value.clone_ref(py);
+                            drop(shard);
+                            self.hits.fetch_add(1, Ordering::Relaxed);
+                            return Ok(val);
+                        }
+                        // Expired — fall through to miss path
+                    } else {
                         entry.visited.store(true, Ordering::Relaxed);
                         let val = entry.value.clone_ref(py);
                         drop(shard);
                         self.hits.fetch_add(1, Ordering::Relaxed);
                         return Ok(val);
                     }
-                    // Expired — fall through to miss path
-                } else {
-                    entry.visited.store(true, Ordering::Relaxed);
-                    let val = entry.value.clone_ref(py);
-                    drop(shard);
-                    self.hits.fetch_add(1, Ordering::Relaxed);
-                    return Ok(val);
                 }
+                true
             }
-        }
-
-        // Cache miss: call the wrapped function (no lock held)
-        let result = self.fn_obj.bind(py).call(args, kwargs.as_ref())?.unbind();
-
-        // SLOW PATH: write lock, double-check, evict if needed, insert.
-        // NOW create a CacheKey since we need to store it.
-        let cache_key = match _key_owner {
-            Some(obj) => CacheKey::with_hash(hash, obj),
-            None => {
-                // No-kwargs path: incref the args tuple for storage
-                let obj: Py<PyAny> = unsafe {
-                    ffi::Py_IncRef(key_ptr);
-                    Bound::from_owned_ptr(py, key_ptr).unbind()
-                };
-                CacheKey::with_hash(hash, obj)
-            }
+            None => false,
         };
 
-        {
-            let mut shard = self.shards[shard_idx].write();
+        // Cache miss (or reentrant bypass): call the wrapped function (no lock held)
+        let result = self.fn_obj.bind(py).call(args, kwargs.as_ref())?.unbind();
 
-            // Double-check: another thread may have inserted while we were computing
-            let needs_insert = match shard.map.get(&cache_key) {
-                Some(entry) => {
-                    if let Some(ttl) = self.ttl {
-                        entry.created_at.elapsed() > ttl
-                    } else {
-                        false
-                    }
+        // Only populate the cache for non-reentrant misses.
+        if entered {
+            // NOW create a CacheKey since we need to store it.
+            let cache_key = match _key_owner {
+                Some(obj) => CacheKey::with_hash(hash, obj),
+                None => {
+                    // No-kwargs path: incref the args tuple for storage
+                    let obj: Py<PyAny> = unsafe {
+                        ffi::Py_IncRef(key_ptr);
+                        Bound::from_owned_ptr(py, key_ptr).unbind()
+                    };
+                    CacheKey::with_hash(hash, obj)
                 }
-                None => true,
             };
 
-            if needs_insert {
-                // Remove expired entry from map if present (order cleaned lazily)
-                shard.map.remove(&cache_key);
+            // SLOW PATH: write lock, double-check, evict if needed, insert.
+            // Reaching here implies this call was not reentrant (a reentrant
+            // call returns from the `None` arm above), so try_enter succeeds;
+            // the `if let` is a defensive guard.
+            if let Some(_enter) = self.try_enter() {
+                let mut shard = self.shards[shard_idx].write();
 
-                // Evict if at capacity
-                while shard.map.len() >= shard.capacity {
-                    Self::evict_one(&mut shard);
-                    if shard.order.is_empty() {
-                        break;
+                // Double-check: another thread may have inserted while we were computing
+                let needs_insert = match shard.map.get(&cache_key) {
+                    Some(entry) => {
+                        if let Some(ttl) = self.ttl {
+                            entry.created_at.elapsed() > ttl
+                        } else {
+                            false
+                        }
                     }
-                }
-
-                let entry = SieveEntry {
-                    value: result.clone_ref(py),
-                    created_at: Instant::now(),
-                    visited: AtomicBool::new(false),
+                    None => true,
                 };
-                shard.map.insert(cache_key.clone(), entry);
-                shard.order.push_back(cache_key);
+
+                if needs_insert {
+                    // Remove expired entry from map if present (order cleaned lazily)
+                    shard.map.remove(&cache_key);
+
+                    // Evict if at capacity
+                    while shard.map.len() >= shard.capacity {
+                        Self::evict_one(&mut shard);
+                        if shard.order.is_empty() {
+                            break;
+                        }
+                    }
+
+                    let entry = SieveEntry {
+                        value: result.clone_ref(py),
+                        created_at: Instant::now(),
+                        visited: AtomicBool::new(false),
+                    };
+                    shard.map.insert(cache_key.clone(), entry);
+                    shard.order.push_back(cache_key);
+                }
             }
         }
 

@@ -64,9 +64,7 @@ class AsyncCachedFunction:
         self.__doc__ = getattr(fn, "__doc__", None)
 
     @staticmethod
-    def _make_inflight_key(
-        args: tuple[Any, ...], kwargs: dict[str, Any] | None
-    ) -> Any:
+    def _make_inflight_key(args: tuple[Any, ...], kwargs: dict[str, Any] | None) -> Any:
         if kwargs:
             return (args, tuple(sorted(kwargs.items())))
         return args
@@ -76,7 +74,15 @@ class AsyncCachedFunction:
         if hit:
             return cached
 
-        key = self._make_inflight_key(args, kwargs or None)
+        # Partition single-flight state per event loop. An asyncio.Event binds to
+        # the loop that first awaits it, so a follower running in a different loop
+        # (e.g. another thread's asyncio.run) must not reuse a leader's Event — doing
+        # so raises "RuntimeError: ... bound to a different event loop" (#35). The
+        # entry is always popped in `finally` while this loop is still running the
+        # coroutine, so the loop stays alive and its id() cannot be reused mid-flight.
+        # ponytail: dict ops are atomic under the GIL and keys are disjoint per loop;
+        # add a lock only if free-threaded builds become supported.
+        key = (id(asyncio.get_running_loop()), self._make_inflight_key(args, kwargs or None))
 
         while True:
             event = self._inflight.get(key)

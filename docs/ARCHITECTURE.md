@@ -68,6 +68,13 @@ For day-to-day workflow and commands, see [`CLAUDE.md`](../CLAUDE.md) and
   `hash & (capacity - 1)`. Always use `.next_power_of_two()`.
 - **`#[repr(C)]` struct field ordering** — place u64 fields before u32 to avoid implicit
   alignment padding; affects `size_of` assertions in `layout.rs`.
+- **Seqlock writer ordering (issue #40).** The writer must publish the odd ("writer active")
+  sequence number *before* its data mutations become visible: `write_lock` does the odd store
+  then an `atomic::fence(Release)` (a Release store alone orders only *prior* ops). This pairs
+  with the reader's `atomic::fence(Acquire)` in `read_validate` — without the writer fence, on
+  weak-memory hardware a data write can float ahead of the odd publish and a reader can validate
+  a torn read against a stale even seq. The ordering is model-checked under `loom` (run
+  `RUSTFLAGS="--cfg loom" cargo test --lib seqlock_ordering`; loom is a `cfg(loom)`-only dep).
 - **Cross-process timestamps must use a system-wide clock (issue #32).** `created_at_nanos`
   is written into shared memory by one process and compared against `now` in another, so
   `shm::current_time_nanos` uses `CLOCK_MONOTONIC` (process-independent on Linux, macOS, and

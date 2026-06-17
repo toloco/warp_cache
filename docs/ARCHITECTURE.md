@@ -68,6 +68,11 @@ For day-to-day workflow and commands, see [`CLAUDE.md`](../CLAUDE.md) and
   `hash & (capacity - 1)`. Always use `.next_power_of_two()`.
 - **`#[repr(C)]` struct field ordering** — place u64 fields before u32 to avoid implicit
   alignment padding; affects `size_of` assertions in `layout.rs`.
+- **Cross-process timestamps must use a system-wide clock (issue #32).** `created_at_nanos`
+  is written into shared memory by one process and compared against `now` in another, so
+  `shm::current_time_nanos` uses `CLOCK_MONOTONIC` (process-independent on Linux, macOS, and
+  the BSDs). Never use `std::time::Instant` for shm timestamps — its epoch is per-process, so
+  the two bases are unrelated and TTL silently breaks across processes (the original macOS bug).
 - **No second shard guard while one is live (reentrancy, issue #30).** A memory-backend
   lookup runs arbitrary Python `__eq__` (via `PyObject_RichCompareBool`) *while a shard guard
   is held*. That `__eq__` can re-enter the same `CachedFunction` (or, on GIL builds, hand off

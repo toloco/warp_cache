@@ -525,35 +525,23 @@ pub struct ShmCacheInfo {
 }
 
 /// Get current monotonic time in nanoseconds.
+///
+/// Uses `CLOCK_MONOTONIC`, which is system-wide (process-independent) on Linux,
+/// macOS (Darwin), and the BSDs. This is required for correctness: `created_at_nanos`
+/// is written into shared memory by one process and compared against `now` in another
+/// (#32). `std::time::Instant` must NOT be used here — its epoch is per-process, so the
+/// subtraction would cross two unrelated time bases and silently break cross-process TTL.
+/// The shm module only compiles on non-Windows targets (see `lib.rs`), so `libc` and
+/// `CLOCK_MONOTONIC` are always available.
 fn current_time_nanos() -> u64 {
-    #[cfg(target_os = "macos")]
-    {
-        use std::time::Instant;
-        // Use a leaked base instant for consistent nanos
-        static BASE: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
-        let base = BASE.get_or_init(Instant::now);
-        base.elapsed().as_nanos() as u64
+    let mut ts = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    unsafe {
+        libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts);
     }
-
-    #[cfg(target_os = "linux")]
-    {
-        let mut ts = libc::timespec {
-            tv_sec: 0,
-            tv_nsec: 0,
-        };
-        unsafe {
-            libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts);
-        }
-        (ts.tv_sec as u64) * 1_000_000_000 + (ts.tv_nsec as u64)
-    }
-
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-    {
-        use std::time::Instant;
-        static BASE: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
-        let base = BASE.get_or_init(Instant::now);
-        base.elapsed().as_nanos() as u64
-    }
+    (ts.tv_sec as u64) * 1_000_000_000 + (ts.tv_nsec as u64)
 }
 
 // ShmCache is Send+Sync because all mutations go through the shm seqlock

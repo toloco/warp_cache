@@ -63,7 +63,7 @@ reproduction.
 ```bash
 make test              # Build + run all tests
 make test-only         # Run tests without rebuilding
-make test-matrix       # Test across Python 3.9-3.14 (serial; prereleases skipped)
+make test-matrix       # Test across Python 3.10-3.14 (serial; prereleases skipped)
 uv run pytest tests/test_basic.py::test_cache_hit -v  # Run a single test
 ```
 

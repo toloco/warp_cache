@@ -13,6 +13,7 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import time
 
 import pytest
 
@@ -176,6 +177,75 @@ class TestMultiprocess:
 
         info = _shared_fn.cache_info()
         assert info.current_size == 16  # still at capacity
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="No shared memory on Windows")
+    def test_cross_process_ttl_uses_systemwide_clock(self):
+        """An entry's TTL must be judged by a system-wide clock so a value
+        written by one process is aged correctly by another (#32).
+
+        The old macOS/non-Linux path timed entries with a per-process
+        ``Instant`` base, so ``created_at_nanos`` (written in the writer's base)
+        was compared against ``now`` in the reader's unrelated base. We force
+        the reader's clock base to be established well before the writer's, then
+        read immediately after the write: the entry is brand new (real age ~0,
+        ttl=1s) so it must be a HIT. Before the fix the base offset (~2s > ttl)
+        made it look long expired -> MISS. Linux already used CLOCK_MONOTONIC, so
+        this passes there before and after; it is the regression guard for macOS.
+        """
+        shm_name = "test_ttl_systemwide_clock"
+        _unlink_shm(shm_name)
+
+        # Reader: establish this process's clock base NOW (warmup insert), report
+        # READY, block until told to read, then read the writer's key.
+        reader_src = textwrap.dedent(f"""\
+            import sys
+            from warp_cache._warp_cache_rs import SharedCachedFunction
+
+            fn = SharedCachedFunction(
+                lambda x: x * x, 16, ttl=1.0,
+                max_key_size=512, max_value_size=4096, shm_name="{shm_name}",
+            )
+            fn(999)                       # warmup -> initializes this proc's clock base early
+            print("READY", flush=True)
+            sys.stdin.readline()          # wait until the writer has inserted key 7
+            val = fn.get(7)               # real age ~0 -> must be a HIT
+            print("HIT" if val is not None else "MISS", flush=True)
+        """)
+
+        # Writer: started >ttl after the reader's base, so its clock base is later.
+        writer_src = textwrap.dedent(f"""\
+            from warp_cache._warp_cache_rs import SharedCachedFunction
+
+            fn = SharedCachedFunction(
+                lambda x: x * x, 16, ttl=1.0,
+                max_key_size=512, max_value_size=4096, shm_name="{shm_name}",
+            )
+            assert fn(7) == 49            # insert key 7 with this proc's (late) base
+        """)
+
+        reader = subprocess.Popen(
+            [sys.executable, "-c", reader_src],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            assert reader.stdout.readline().strip() == "READY", "reader never warmed up"
+            # Gap > ttl: the writer's clock base ends up >1s after the reader's,
+            # which is exactly the offset that broke the pre-fix per-process timer.
+            time.sleep(2.0)
+            subprocess.run([sys.executable, "-c", writer_src], check=True, timeout=30)
+            reader.stdin.write("go\n")  # read now, right after the write (real age ~0)
+            reader.stdin.flush()
+            out, _ = reader.communicate(timeout=30)
+        finally:
+            if reader.poll() is None:
+                reader.kill()
+            _unlink_shm(shm_name)
+
+        assert out.strip().splitlines()[-1] == "HIT", (
+            f"cross-process TTL judged a fresh entry expired (stale clock base): {out!r}"
+        )
 
     @pytest.mark.skipif(sys.platform == "win32", reason="No shared memory on Windows")
     def test_cross_process_str_key_different_hashseed(self):

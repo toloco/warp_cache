@@ -117,7 +117,7 @@ A change is **risky** if it touches any of:
 For risky changes, additionally run and report:
 
 ```bash
-make test-matrix -j     # Python 3.9–3.14
+make test-matrix        # Python 3.9–3.14 (serial; prereleases skipped)
 make bench              # or: make bench-sieve  for eviction-quality changes
 ```
 

@@ -10,7 +10,6 @@ permissions:
 env:
   # Strip leading 'v' if present (v0.2.0 → 0.2.0)
   RAW_VERSION: ${{ github.event.release.tag_name }}
-  PYTHON_VERSIONS: "3.9 3.10 3.11 3.12 3.13 3.14"
 
 jobs:
   build-linux:
@@ -32,7 +31,7 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.target }}
-          args: --release --out dist -i python3.9 python3.10 python3.11 python3.12 python3.13 python3.14
+          args: --release --out dist -i python3.10 python3.11 python3.12 python3.13 python3.14
           manylinux: auto
       - uses: actions/upload-artifact@v4
         with:
@@ -49,7 +48,6 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: |
-            3.9
             3.10
             3.11
             3.12
@@ -64,7 +62,7 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.target }}
-          args: --release --out dist -i python3.9 python3.10 python3.11 python3.12 python3.13 python3.14
+          args: --release --out dist -i python3.10 python3.11 python3.12 python3.13 python3.14
       - uses: actions/upload-artifact@v4
         with:
           name: wheels-macos-${{ matrix.target }}
@@ -77,7 +75,6 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: |
-            3.9
             3.10
             3.11
             3.12
@@ -93,7 +90,7 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           target: x86_64
-          args: --release --out dist -i python3.9 python3.10 python3.11 python3.12 python3.13 python3.14
+          args: --release --out dist -i python3.10 python3.11 python3.12 python3.13 python3.14
       - uses: actions/upload-artifact@v4
         with:
           name: wheels-windows-x86_64

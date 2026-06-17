@@ -75,6 +75,11 @@ For day-to-day workflow and commands, see [`CLAUDE.md`](../CLAUDE.md) and
   weak-memory hardware a data write can float ahead of the odd publish and a reader can validate
   a torn read against a stale even seq. The ordering is model-checked under `loom` (run
   `RUSTFLAGS="--cfg loom" cargo test --lib seqlock_ordering`; loom is a `cfg(loom)`-only dep).
+  alignment padding; affects `size_of` assertions in `layout.rs`. Any field the lock-free
+  read path *writes* (currently only `SlotHeader.visited`) must be an atomic type accessed
+  with `Relaxed` — readers touch it without the write lock while writers reuse the slot, so a
+  plain field is a data race (issue #37). `AtomicU64` is layout-identical to `u64`, so this
+  doesn't change the cross-process layout.
 - **Cross-process timestamps must use a system-wide clock (issue #32).** `created_at_nanos`
   is written into shared memory by one process and compared against `now` in another, so
   `shm::current_time_nanos` uses `CLOCK_MONOTONIC` (process-independent on Linux, macOS, and

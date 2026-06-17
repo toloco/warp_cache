@@ -251,8 +251,10 @@ impl ShmCache {
     /// Look up a key (by hash + serialized bytes). Returns a copy of the value bytes on hit.
     ///
     /// Uses optimistic seqlock reads. Fully lock-free: on hit, sets `visited=1`
-    /// via a direct store (idempotent, safe even if the slot is concurrently evicted
-    /// because the mmap memory remains valid).
+    /// via an atomic (Relaxed) store. The store runs without the write lock and races
+    /// a concurrent writer reusing the slot, so the field is atomic to avoid a data
+    /// race (#37). The store is idempotent; if the slot was just evicted/reused, the
+    /// worst case is a benign `visited=1` on a fresh entry (one extra SIEVE round).
     pub fn get(&self, key_hash: u64, key_bytes: &[u8]) -> ShmGetResult {
         let lock = self.lock();
 
@@ -260,14 +262,17 @@ impl ShmCache {
 
         match result {
             OptimisticResult::Hit { value, slot_index } => {
-                // SIEVE: mark as visited — lock-free, idempotent store
+                // SIEVE: mark as visited — lock-free, idempotent atomic store.
+                // ponytail: accept the benign policy skew on a racing reuse; gating the
+                // store on a key re-check would add a racy non-atomic compare for no
+                // correctness gain (returned value was already seqlock-validated).
                 unsafe {
                     let slot_size = self.header().slot_size;
                     let slot_ptr = self
-                        .slab_base_mut()
+                        .slab_base()
                         .add(slot_index as usize * slot_size as usize);
-                    let slot = &mut *(slot_ptr as *mut SlotHeader);
-                    slot.visited = 1;
+                    let slot = &*(slot_ptr as *const SlotHeader);
+                    slot.visited.store(1, AtomicOrdering::Relaxed);
                 }
 
                 // Stats: atomic, no lock needed
@@ -337,7 +342,7 @@ impl ShmCache {
             let slot = &mut *(slot_ptr as *mut SlotHeader);
             slot.value_len = value_bytes.len() as u32;
             slot.created_at_nanos = current_time_nanos();
-            slot.visited = 1;
+            slot.visited.store(1, AtomicOrdering::Relaxed);
 
             let value_dest = slot_ptr.add(SLOT_HEADER_SIZE + slot.key_len as usize);
             std::ptr::copy_nonoverlapping(value_bytes.as_ptr(), value_dest, value_bytes.len());
@@ -398,7 +403,7 @@ impl ShmCache {
         slot.key_len = key_bytes.len() as u32;
         slot.value_len = value_bytes.len() as u32;
         slot.created_at_nanos = current_time_nanos();
-        slot.visited = 0;
+        slot.visited.store(0, AtomicOrdering::Relaxed);
         slot.prev = SLOT_NONE;
         slot.next = SLOT_NONE;
         slot.unique_id = self.next_unique_id.fetch_add(1, AtomicOrdering::Relaxed);

@@ -3,6 +3,8 @@
 //! All structs use fixed-size fields and explicit padding so the
 //! layout is identical across compilations and processes.
 
+use std::sync::atomic::AtomicU64;
+
 /// Magic bytes at the start of the header to validate the mapping.
 pub const MAGIC: [u8; 8] = *b"FCACHE01";
 
@@ -79,8 +81,12 @@ pub struct SlotHeader {
     // 8-byte aligned group
     pub key_hash: u64,         // 0..8
     pub created_at_nanos: u64, // 8..16  (monotonic nanos)
-    pub visited: u64,          // 16..24 (SIEVE: 0=unvisited, 1=visited)
-    pub unique_id: u64,        // 24..32 (unused, kept for layout stability)
+    // SIEVE bit: 0=unvisited, 1=visited. Atomic because the lock-free reader sets it
+    // (no write lock) while a writer concurrently reuses the slot — a data race on a
+    // plain field (#37). AtomicU64 is layout-identical to u64 (same size/align), so the
+    // cross-process #[repr(C)] layout and zero-init (AtomicU64(0) == unvisited) are unchanged.
+    pub visited: AtomicU64, // 16..24
+    pub unique_id: u64,     // 24..32 (unused, kept for layout stability)
 
     // 4-byte aligned group
     pub occupied: u32,  // 32..36 (1 = occupied, 0 = free)

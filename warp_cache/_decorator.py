@@ -1,15 +1,9 @@
 from __future__ import annotations
 
 import asyncio
-import sys
 import warnings
 from collections.abc import Callable
-from typing import Any, TypeVar
-
-if sys.version_info >= (3, 10):
-    from typing import ParamSpec, Protocol, runtime_checkable
-else:
-    from typing_extensions import ParamSpec, Protocol, runtime_checkable
+from typing import Any, ParamSpec, Protocol, TypeVar, runtime_checkable
 
 from warp_cache._strategies import Backend
 from warp_cache._warp_cache_rs import (

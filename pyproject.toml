@@ -8,14 +8,13 @@ dynamic = ["version"]
 description = "Thread-safe Python caching decorator powered by a Rust extension. Implements SIEVE eviction for scan-resistant, near-optimal hit rates with zero-cost locking under the GIL — entire cache lookup in a single Rust __call__, no Python wrapper overhead. 16–23M ops/s single-threaded, 25× faster than cachetools, with cross-process shared memory support."
 readme = "README.md"
 license = "MIT"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 keywords = ["cache", "lru", "ttl", "thread-safe", "rust"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -24,9 +23,7 @@ classifiers = [
     "Programming Language :: Rust",
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
-dependencies = [
-    "typing_extensions>=4.0; python_version < '3.10'",
-]
+dependencies = []
 
 [dependency-groups]
 dev = [
@@ -38,7 +35,7 @@ dev = [
     "cachetools>=6.2.6",
     "cachebox>=4.0",
     "moka-py>=0.3",
-    "zoocache>=0.1; python_version >= '3.10'",
+    "zoocache>=0.1",
     "ty>=0.0.17",
 ]
 
@@ -50,7 +47,7 @@ features = ["pyo3/extension-module"]
 module-name = "warp_cache._warp_cache_rs"
 
 [tool.ruff]
-target-version = "py39"
+target-version = "py310"
 line-length = 100
 
 [tool.ruff.lint]
@@ -64,7 +61,7 @@ select = ["E", "F", "W", "I", "UP", "B", "SIM"]
 include = ["warp_cache"]
 
 [tool.ty.environment]
-python-version = "3.9"
+python-version = "3.10"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

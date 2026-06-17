@@ -1,5 +1,7 @@
 import asyncio
 import sys
+import threading
+import time
 
 import pytest
 
@@ -278,8 +280,12 @@ async def test_async_single_flight_different_keys():
         return x * 10
 
     results = await asyncio.gather(
-        slow_fn(1), slow_fn(2), slow_fn(3),
-        slow_fn(1), slow_fn(2), slow_fn(3),
+        slow_fn(1),
+        slow_fn(2),
+        slow_fn(3),
+        slow_fn(1),
+        slow_fn(2),
+        slow_fn(3),
     )
     assert results == [10, 20, 30, 10, 20, 30]
     assert call_count == 3
@@ -333,6 +339,52 @@ async def test_async_single_flight_cancellation():
     assert results == [10, 10, 10]
     # Leader was cancelled (count 1), then one waiter recomputed (count 2)
     assert call_count == 2
+
+
+def test_async_single_flight_across_event_loops():
+    """Single-flight state must be partitioned per event loop (#35).
+
+    asyncio.Event binds to the first loop that awaits it. With one shared
+    _inflight dict (no per-loop keying), a follower running in a *different*
+    loop — e.g. another thread calling asyncio.run — retrieves the leader's
+    Event and ``await event.wait()`` raises 'RuntimeError: ... is bound to a
+    different event loop'. Two threads each run their own loop and gather
+    concurrent same-key calls; staggered so loop A registers its leader first,
+    loop B then crashed on the shared Event before the fix.
+    """
+    call_count = 0
+    count_lock = threading.Lock()
+
+    @cache(max_size=128)
+    async def slow_fn(x):
+        nonlocal call_count
+        with count_lock:
+            call_count += 1
+        await asyncio.sleep(0.2)  # keep the leader in-flight across the stagger
+        return x * 10
+
+    results: dict[str, list[int]] = {}
+    errors: dict[str, str] = {}
+
+    def run_in_loop(label: str) -> None:
+        async def main() -> list[int]:
+            return await asyncio.gather(slow_fn(1), slow_fn(1), slow_fn(1))
+
+        try:
+            results[label] = asyncio.run(main())
+        except BaseException as e:  # noqa: BLE001 - capture cross-loop crash for the parent
+            errors[label] = repr(e)
+
+    t_a = threading.Thread(target=run_in_loop, args=("A",))
+    t_b = threading.Thread(target=run_in_loop, args=("B",))
+    t_a.start()
+    time.sleep(0.05)  # let loop A register its leader Event while it sleeps
+    t_b.start()
+    t_a.join(timeout=10)
+    t_b.join(timeout=10)
+
+    assert not errors, f"cross-loop single-flight crashed: {errors}"
+    assert results == {"A": [10, 10, 10], "B": [10, 10, 10]}
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="shared memory is Unix-only")

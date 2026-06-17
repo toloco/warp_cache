@@ -1,0 +1,89 @@
+name: Benchmark trends
+
+# Trend tracking only (no PR gating) — runs on master pushes so the gh-pages
+# history reflects merged code. Manual runs via workflow_dispatch.
+# ponytail: master-only by design. If you ever want per-PR perf numbers, add
+# `pull_request:` here and gate the publish job on event_name == 'push'.
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux x86_64 — full version sweep (Python version moves perf most)
+          - { os: ubuntu-latest, python-version: "3.9" }
+          - { os: ubuntu-latest, python-version: "3.10" }
+          - { os: ubuntu-latest, python-version: "3.11" }
+          - { os: ubuntu-latest, python-version: "3.12" }
+          - { os: ubuntu-latest, python-version: "3.13" }
+          - { os: ubuntu-latest, python-version: "3.14" }
+          # Linux arm64 — boundary versions
+          - { os: ubuntu-24.04-arm, python-version: "3.9" }
+          - { os: ubuntu-24.04-arm, python-version: "3.14" }
+          # macOS arm64 — boundary versions
+          - { os: macos-latest, python-version: "3.9" }
+          - { os: macos-latest, python-version: "3.14" }
+          # Windows excluded: bench-quick runs shared-memory/multiprocess steps
+          # that don't run on Windows (same reason the test job skips them there).
+    runs-on: ${{ matrix.os }}
+    env:
+      TAG: ${{ matrix.os }}-py${{ matrix.python-version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: bench-${{ matrix.os }}-py${{ matrix.python-version }}
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          allow-prereleases: true
+      - name: Install build deps
+        run: uv pip install maturin
+      - name: Build extension
+        run: uv run maturin develop --release
+      - name: Run benchmarks (quick)
+        run: uv run python benchmarks/_bench_runner.py --tag "$TAG" --quick
+      - name: Convert to action format
+        run: uv run python benchmarks/_to_action_json.py "benchmarks/results/bench_$TAG.json" "bench-action-$TAG.json" --tag "$TAG"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bench-action-${{ matrix.os }}-py${{ matrix.python-version }}
+          path: bench-action-${{ env.TAG }}.json
+          if-no-files-found: error
+
+  publish:
+    needs: bench
+    runs-on: ubuntu-latest
+    # Single push to gh-pages from one job — matrix cells must NOT each push
+    # (concurrent gh-pages pushes race). They upload artifacts; we merge here.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: bench-action-*
+          path: bench-artifacts
+          merge-multiple: true
+      - name: Merge all cells into one series file
+        run: jq -s 'add' bench-artifacts/*.json > combined.json
+      - name: Publish to gh-pages (trend charts)
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          name: warp_cache benchmarks
+          tool: customBiggerIsBetter
+          output-file-path: combined.json
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          gh-pages-branch: gh-pages
+          benchmark-data-dir-path: dev/bench
+          auto-push: true
+          fail-on-alert: false # trend tracking only — never gate on noisy CI numbers

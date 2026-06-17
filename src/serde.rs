@@ -94,7 +94,13 @@ fn serialize_element(_py: Python, obj: &Bound<PyAny>, buf: &mut Vec<u8>) -> PyRe
 
     // str
     if obj.is_instance_of::<PyString>() {
-        let s = obj.cast::<PyString>()?.to_cow()?;
+        // to_cow() errors for strings that aren't valid UTF-8 (lone surrogates,
+        // e.g. from os.fsdecode of non-UTF8 paths). They can't go through the
+        // UTF-8 fast path, so fall back to pickle (which handles them) instead
+        // of propagating UnicodeEncodeError out of the cached call.
+        let Ok(s) = obj.cast::<PyString>()?.to_cow() else {
+            return Ok(false);
+        };
         let bytes = s.as_bytes();
         buf.push(TAG_STR);
         buf.extend_from_slice(&(bytes.len() as u32).to_le_bytes());

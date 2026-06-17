@@ -320,6 +320,22 @@ class TestSharedComplexValues:
         assert result["list"] == list(range(100))
         assert mixed() == result
 
+    def test_surrogate_string_value(self):
+        # Lone surrogates are valid Python str but not UTF-8 encodable; the
+        # fast path must fall back to pickle instead of raising (issue #34).
+        call_count = 0
+
+        @cache(max_size=16, backend="shared")
+        def make(_):
+            nonlocal call_count
+            call_count += 1
+            return "head\ud800tail"
+
+        result = make(0)
+        assert result == "head\ud800tail"
+        assert make(0) == result
+        assert call_count == 1
+
 
 @_skip_on_windows
 class TestSharedComplexKeys:
@@ -383,4 +399,36 @@ class TestSharedComplexKeys:
         fs = frozenset(range(200))
         assert count(fs) == 200
         assert count(fs) == 200
+        assert call_count == 1
+
+    def test_surrogate_string_key(self):
+        # A lone-surrogate string argument must serialize (via pickle fallback)
+        # and hit the cache instead of raising UnicodeEncodeError (issue #34).
+        call_count = 0
+
+        @cache(max_size=16, backend="shared")
+        def echo(s):
+            nonlocal call_count
+            call_count += 1
+            return len(s)
+
+        sur = "\ud800"
+        assert echo(sur) == 1
+        assert echo(sur) == 1
+        assert call_count == 1
+
+    def test_surrogate_string_in_tuple_key(self):
+        # Surrogate nested in a tuple exercises the tuple serialize path, as
+        # both key and value (issue #34).
+        call_count = 0
+
+        @cache(max_size=16, backend="shared")
+        def f(t):
+            nonlocal call_count
+            call_count += 1
+            return t
+
+        key = ("ok", "\udfff", 3)
+        assert f(key) == key
+        assert f(key) == key
         assert call_count == 1

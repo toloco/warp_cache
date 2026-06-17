@@ -177,8 +177,27 @@ impl ShmRegion {
         ttl_nanos: u64,
     ) -> io::Result<Self> {
         let dir = shm_dir();
+        if !dir.exists() {
+            fs::create_dir_all(&dir)?;
+        }
         let data_path = dir.join(format!("{name}.data"));
         let lock_path = dir.join(format!("{name}.lock"));
+        let init_path = dir.join(format!("{name}.init"));
+
+        // Serialize creation across processes (#33). Without this, two cold-start
+        // creators can both fall through to create(), and the second's
+        // truncate+zero clobbers a region the first has already mapped — SIGBUS, or
+        // a torn read handing garbage back to Python. Hold an exclusive advisory
+        // lock on a dedicated .init file (never truncated) for the whole
+        // open-or-create decision; concurrent starters block here, then open the
+        // already-initialized file instead of racing into create().
+        let init_file = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false) // never truncate — it's purely an advisory lock file
+            .open(&init_path)?;
+        init_file.lock()?;
 
         if data_path.exists() && lock_path.exists() {
             match Self::open_paths(&data_path, &lock_path) {
@@ -192,11 +211,11 @@ impl ShmRegion {
                     {
                         return Ok(region);
                     }
-                    // Parameters don't match — recreate
+                    // Parameters don't match — recreate (still under the init lock).
                     drop(region);
                 }
                 Err(_) => {
-                    // Stale or corrupted file — recreate
+                    // Stale or corrupted file — recreate (still under the init lock).
                 }
             }
         }
@@ -209,6 +228,7 @@ impl ShmRegion {
             max_value_size,
             ttl_nanos,
         )
+        // init_file's advisory lock is released when it drops at end of scope.
     }
 
     pub fn header(&self) -> &Header {

@@ -117,7 +117,7 @@ A change is **risky** if it touches any of:
 For risky changes, additionally run and report:
 
 ```bash
-make test-matrix -j     # Python 3.9–3.14
+make test-matrix -j     # Python 3.10–3.14
 make bench              # or: make bench-sieve  for eviction-quality changes
 ```
 
@@ -173,7 +173,7 @@ These two are cheap to violate and easy to miss in review:
 
 ## Linting
 
-- **Python**: ruff (rules `E, F, W, I, UP, B, SIM`; line-length 100; target py39) + `ty`.
+- **Python**: ruff (rules `E, F, W, I, UP, B, SIM`; line-length 100; target py310) + `ty`.
 - **Rust**: `cargo fmt`, `cargo clippy -- -D warnings`.
 
 `make fmt` and `make lint` handle both languages.

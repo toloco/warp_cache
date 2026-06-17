@@ -160,7 +160,7 @@ If no wheel is available for your platform, pip will fall back to the source dis
 
 ## Status
 
-- **Core API is stable.** Prebuilt wheels on PyPI, Python 3.9-3.14.
+- **Core API is stable.** Prebuilt wheels on PyPI, Python 3.10-3.14.
 - **Free-threading codepath** (`#[cfg(Py_GIL_DISABLED)]`) is tested but gets less real-world usage than the GIL-enabled path.
 - **Shared memory layout** is v3, stable. Existing shared caches survive process restarts.
 

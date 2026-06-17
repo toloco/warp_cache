@@ -5,6 +5,8 @@ import glob
 import os
 import tempfile
 
+import pytest
+
 from warp_cache import SharedCacheInfo, cache
 
 
@@ -330,3 +332,29 @@ class TestSharedMemoryBackend:
         info = fn.cache_info()
         assert isinstance(info, SharedCacheInfo)
         assert hasattr(info, "oversize_skips")
+
+
+class TestSharedMaxSizeZero:
+    """Regression for #31: max_size=0 on the shared backend used to build a
+    zero-slot slab and read+write out of bounds on the first insert."""
+
+    def setup_method(self):
+        _cleanup_shm()
+
+    def teardown_method(self):
+        _cleanup_shm()
+
+    def test_max_size_zero_raises(self):
+        with pytest.raises(ValueError, match="max_size must be >= 1"):
+
+            @cache(max_size=0, backend="shared")
+            def fn(x):
+                return x
+
+    def test_max_size_one_is_usable(self):
+        @cache(max_size=1, backend="shared")
+        def fn(x):
+            return x * 2
+
+        assert fn(3) == 6
+        assert fn(3) == 6

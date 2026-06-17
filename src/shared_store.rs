@@ -62,6 +62,12 @@ impl SharedCachedFunction {
         max_value_size: usize,
         shm_name: Option<String>,
     ) -> PyResult<Self> {
+        if max_size == 0 {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "max_size must be >= 1 for the shared backend",
+            ));
+        }
+
         let pickle = py.import("pickle")?;
         let pickle_dumps = pickle.getattr("dumps")?.unbind();
         let pickle_loads = pickle.getattr("loads")?.unbind();

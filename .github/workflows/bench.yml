@@ -12,6 +12,13 @@ on:
 permissions:
   contents: read
 
+# Cancel an in-flight run when a newer master push starts — otherwise a batch of
+# merges stacks up full matrices that contend for the limited macOS/arm runners
+# and delay (or stall) the gated publish job.
+concurrency:
+  group: bench-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   bench:
     strategy:
@@ -50,7 +57,9 @@ jobs:
       - name: Build extension
         run: uv run maturin develop --release
       - name: Run benchmarks (quick)
-        run: uv run python benchmarks/_bench_runner.py --tag "$TAG" --quick
+        # --warp-only: the trend dashboard charts only warp_cache, and a competitor
+        # lib that hangs (cachebox infinite-loops on 3.10/3.11) would stall the job.
+        run: uv run python benchmarks/_bench_runner.py --tag "$TAG" --quick --warp-only
       - name: Convert to action format
         run: uv run python benchmarks/_to_action_json.py "benchmarks/results/bench_$TAG.json" "bench-action-$TAG.json" --tag "$TAG"
       - uses: actions/upload-artifact@v4
@@ -85,4 +94,10 @@ jobs:
           gh-pages-branch: gh-pages
           benchmark-data-dir-path: dev/bench
           auto-push: true
-          fail-on-alert: false # trend tracking only — never gate on noisy CI numbers
+          # Notify on a real regression (>=2x slower than the previous run) via a
+          # commit comment, but never fail the build — CI perf numbers are noisy.
+          # Tighten alert-threshold later if 200% proves too lax.
+          alert-threshold: "200%"
+          comment-on-alert: true
+          alert-comment-cc-users: "@toloco"
+          fail-on-alert: false

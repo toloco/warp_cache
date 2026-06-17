@@ -52,7 +52,7 @@ async def _async_identity(x: int) -> int:
     return x
 
 
-def _build_contestants() -> list[Contestant]:
+def _build_contestants(warp_only: bool = False) -> list[Contestant]:
     contestants: list[Contestant] = []
 
     # 1. warp_cache (always available — this is the project under test)
@@ -69,6 +69,12 @@ def _build_contestants() -> list[Contestant]:
             version="0.1.0",
         )
     )
+
+    # warp_only: skip the comparison libs entirely. The trend dashboard only
+    # charts warp_cache, and a competitor that hangs (e.g. cachebox infinite-
+    # looping on 3.10/3.11) would otherwise stall the whole CI bench job.
+    if warp_only:
+        return contestants
 
     # 2. functools.lru_cache (stdlib, always available)
     contestants.append(
@@ -641,10 +647,15 @@ def main() -> None:
     parser.add_argument("--tag", required=True, help="Label for this run (e.g. py3.12)")
     parser.add_argument("--quick", action="store_true", help="Skip sustained & TTL benchmarks")
     parser.add_argument("--rounds", type=int, default=3, help="Rounds per burst benchmark (median)")
+    parser.add_argument(
+        "--warp-only",
+        action="store_true",
+        help="Benchmark only warp_cache (skip comparison libs). Used by the CI trend job.",
+    )
     args = parser.parse_args()
 
     info = python_info()
-    contestants = _build_contestants()
+    contestants = _build_contestants(warp_only=args.warp_only)
     available = [c for c in contestants if c.available]
     unavailable = [c for c in contestants if not c.available]
 

@@ -1,6 +1,8 @@
 /// Intrusive doubly-linked list and SIEVE eviction for shared memory.
 ///
 /// Uses prev/next indices stored in each slot header.
+use std::sync::atomic::Ordering;
+
 use super::layout::{Header, SlotHeader, SLOT_NONE};
 
 /// Get a reference to a slot header.
@@ -85,9 +87,9 @@ pub unsafe fn sieve_evict(header: &mut Header, slab_base: *mut u8, slot_size: u3
     let capacity = header.capacity;
     for _ in 0..capacity * 2 {
         let s = slot_mut(slab_base, slot_size, hand);
-        if s.visited != 0 {
+        if s.visited.load(Ordering::Relaxed) != 0 {
             // Second chance: clear visited bit, advance hand
-            s.visited = 0;
+            s.visited.store(0, Ordering::Relaxed);
             let next = s.next;
             hand = if next != SLOT_NONE {
                 next

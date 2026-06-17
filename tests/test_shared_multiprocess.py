@@ -68,6 +68,37 @@ def _worker_read(x):
     return result, _shared_fn.cache_info().hits
 
 
+# Small capacity so that writer inserts constantly evict and *reuse* the slots
+# readers are touching — drives the lock-free visited store against slot reuse (#37).
+_race_fn = SharedCachedFunction(
+    lambda x: x * x,
+    64,
+    ttl=None,
+    max_key_size=512,
+    max_value_size=4096,
+    shm_name="test_visited_race",
+)
+
+
+def _race_worker(role, args, q):
+    """Reader verifies every get returns k*k; writer churns distinct keys to evict."""
+    try:
+        if role == "r":
+            hot_keys, iters = args
+            ok = all(
+                _race_fn(hot_keys[i % len(hot_keys)]) == hot_keys[i % len(hot_keys)] ** 2
+                for i in range(iters)
+            )
+            q.put(bool(ok))
+        else:
+            start, iters = args
+            for k in range(start, start + iters):
+                _race_fn(k)  # distinct cold keys force eviction/reuse of slots
+            q.put(True)
+    except BaseException as e:  # noqa: BLE001 - report any failure back to the parent
+        q.put(f"ERR:{e!r}")
+
+
 def _cold_start_worker(shm_name, barrier, q):
     """Construct a fresh shared cache and exercise it. Run concurrently against
     a cold (nonexistent) shm_name to race create_or_open (#33)."""
@@ -130,6 +161,44 @@ class TestMultiprocess:
                 f"round {round_i}: bad results {results}"
             )
             _unlink_shm(shm_name)
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="No fork on Windows")
+    def test_concurrent_get_during_eviction_no_corruption(self):
+        """Readers get() hot keys while writers insert enough distinct keys to
+        evict and reuse those slots (#37). The lock-free read path marks
+        ``visited`` on a slot a writer may be concurrently reinitializing; the
+        field is now atomic (Relaxed) so this is no longer a data race. Drive it
+        hard across processes and assert no worker crashes and every get returns
+        the correct value.
+
+        Note: on x86-64/ARM64 the pre-fix plain store was benign (an aligned
+        8-byte store can't tear), so this guards path consistency rather than
+        deterministically failing pre-fix; the fix removes the formal data race.
+        """
+        ctx = multiprocessing.get_context("fork")
+        _race_fn.cache_clear()
+        hot_keys = list(range(16))
+        q = ctx.Queue()
+        specs = [("r", (hot_keys, 4000)) for _ in range(4)] + [
+            ("w", (1000 + i * 5000, 5000)) for i in range(4)
+        ]
+        procs = [ctx.Process(target=_race_worker, args=(role, a, q)) for role, a in specs]
+        for p in procs:
+            p.start()
+        for p in procs:
+            p.join(timeout=60)
+
+        exitcodes = [p.exitcode for p in procs]
+        results = []
+        with contextlib.suppress(queue.Empty):
+            while True:
+                results.append(q.get_nowait())
+
+        assert all(c == 0 for c in exitcodes), (
+            f"worker crashed (exitcodes={exitcodes}, results={results})"
+        )
+        assert len(results) == len(specs), f"missing worker results: {results}"
+        assert all(r is True for r in results), f"reader saw a wrong value: {results}"
 
     @pytest.mark.skipif(sys.platform == "win32", reason="No fork on Windows")
     def test_cross_process_visibility(self):

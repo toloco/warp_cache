@@ -42,12 +42,21 @@ test: build test-rust ## Build and run tests
 	uv run $(UV_PYTHON) pytest tests/ -v
 
 
-TEST_TARGETS := $(addprefix test-py-,$(SUPPORTED_PYTHONS))
-test-matrix: $(TEST_TARGETS) ## Run tests for multiple Python versions (parallel with -j)
-
-test-py-%:
-	@echo "==> Testing with Python $*"
-	@$(MAKE) test PYTHON=$*
+# Runs serially on purpose: every version repoints the shared .venv, and the
+# shared-backend tests all use one process-wide shm dir (/tmp/warp_cache or
+# /dev/shm) with fixed names — running versions concurrently (-j) clobbers both.
+# Prereleases are skipped with a warning: their ABI is incompatible with PyO3
+# and segfault instead of failing cleanly (e.g. a stale 3.14.0aN that uv resolves
+# for `--python 3.14`). CI tests the real finals via setup-python.
+test-matrix: ## Run the test suite across all supported Python versions (serial)
+	@for v in $(SUPPORTED_PYTHONS); do \
+		echo "==> Testing with Python $$v"; \
+		if ! uv run --python $$v --no-project python -c "import sys; sys.exit(0 if sys.version_info.releaselevel == 'final' else 1)"; then \
+			echo "WARNING: skipping Python $$v — 'uv run --python $$v' resolved to a prerelease ($$(uv run --python $$v --no-project python -c 'import sys; print(sys.version.split()[0])')); its ABI breaks PyO3. Install a stable build: uv python install $$v"; \
+			continue; \
+		fi; \
+		$(MAKE) test PYTHON=$$v || exit 1; \
+	done
 
 test-only: ## Run tests without rebuilding
 	uv run $(UV_PYTHON) pytest tests/ -v

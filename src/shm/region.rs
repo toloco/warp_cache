@@ -38,6 +38,17 @@ impl ShmRegion {
         max_value_size: u32,
         ttl_nanos: u64,
     ) -> io::Result<Self> {
+        // ponytail: capacity==0 makes a zero-slot slab while free_head stays 0,
+        // so the first insert dereferences a slot one-past-the-end of the mmap
+        // (OOB read+write). Reject at the unsafe boundary so the region can never
+        // be constructed unsound, regardless of caller. See issue #31.
+        if capacity == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "shared cache capacity (max_size) must be >= 1",
+            ));
+        }
+
         let dir = shm_dir();
         if !dir.exists() {
             fs::create_dir_all(&dir)?;
@@ -211,5 +222,4 @@ impl ShmRegion {
     pub fn base_ptr(&self) -> *const u8 {
         self.mmap.as_ptr()
     }
-
 }

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import functools
+import inspect
 import warnings
 from collections.abc import Callable
 from typing import Any, ParamSpec, Protocol, TypeVar, runtime_checkable
@@ -62,6 +64,13 @@ class AsyncCachedFunction:
         self.__qualname__ = getattr(fn, "__qualname__", self.__name__)
         self.__module__ = getattr(fn, "__module__", __name__)
         self.__doc__ = getattr(fn, "__doc__", None)
+        # Mark the wrapper as a coroutine function so frameworks that branch on
+        # iscoroutinefunction (FastAPI/Starlette, anyio, pytest-asyncio) await it
+        # instead of treating it as sync and dropping the returned coroutine (#44).
+        if hasattr(inspect, "markcoroutinefunction"):  # Python 3.12+
+            inspect.markcoroutinefunction(self)
+        else:  # 3.10 / 3.11: set the sentinel asyncio.iscoroutinefunction checks
+            self._is_coroutine = asyncio.coroutines._is_coroutine  # ty: ignore[unresolved-attribute]
 
     @staticmethod
     def _make_inflight_key(args: tuple[Any, ...], kwargs: dict[str, Any] | None) -> Any:
@@ -183,6 +192,11 @@ def cache(
         if asyncio.iscoroutinefunction(fn):
             return AsyncCachedFunction(fn, inner)  # type: ignore[return-value]
 
+        # Sync path returns the Rust object directly (no Python wrapper, so __call__
+        # stays a single FFI crossing). Copy introspection metadata onto it —
+        # __name__/__qualname__/__module__/__doc__ and __wrapped__ so inspect.signature
+        # resolves to the original (#43). The pyclass carries a __dict__ for this.
+        functools.wraps(fn)(inner)
         return inner
 
     return decorator

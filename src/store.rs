@@ -239,7 +239,10 @@ impl CacheInfo {
     }
 }
 
-#[pyclass(frozen)]
+// `dict` gives instances a __dict__ so the Python decorator can apply
+// functools.wraps (copies __name__/__qualname__/__module__/__doc__/__wrapped__)
+// for introspection (#43). Only touched at decoration time, never on the hot path.
+#[pyclass(frozen, dict)]
 pub struct CachedFunction {
     fn_obj: Py<PyAny>,
     shards: Box<[ShardLock]>,

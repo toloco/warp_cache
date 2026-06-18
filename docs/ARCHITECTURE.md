@@ -67,6 +67,14 @@ For day-to-day workflow and commands, see [`CLAUDE.md`](../CLAUDE.md) and
 - **Hash table capacity must be power-of-2** — bitmask probing uses
   `hash & (capacity - 1)`. Always use `.next_power_of_two()`.
 - **`#[repr(C)]` struct field ordering** — place u64 fields before u32 to avoid implicit
+  alignment padding; affects `size_of` assertions in `layout.rs`.
+- **Seqlock writer ordering (issue #40).** The writer must publish the odd ("writer active")
+  sequence number *before* its data mutations become visible: `write_lock` does the odd store
+  then an `atomic::fence(Release)` (a Release store alone orders only *prior* ops). This pairs
+  with the reader's `atomic::fence(Acquire)` in `read_validate` — without the writer fence, on
+  weak-memory hardware a data write can float ahead of the odd publish and a reader can validate
+  a torn read against a stale even seq. The ordering is model-checked under `loom` (run
+  `RUSTFLAGS="--cfg loom" cargo test --lib seqlock_ordering`; loom is a `cfg(loom)`-only dep).
   alignment padding; affects `size_of` assertions in `layout.rs`. Any field the lock-free
   read path *writes* (currently only `SlotHeader.visited`) must be an atomic type accessed
   with `Relaxed` — readers touch it without the write lock while writers reuse the slot, so a

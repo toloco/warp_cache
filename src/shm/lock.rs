@@ -99,6 +99,15 @@ impl ShmSeqLock {
         let seq = unsafe { &*self.seq_ptr };
         let prev = seq.load(Ordering::Relaxed);
         seq.store(prev + 1, Ordering::Release);
+        // Release fence so the odd-seq publish is ordered BEFORE the data
+        // mutations that follow (#40). A Release store alone orders only the ops
+        // *preceding* it, so without this fence the data writes can float ahead of
+        // the odd store on weak-memory hardware (ARM64) — a reader could then see
+        // mutated data while seq still reads even at both read_begin and
+        // read_validate, falsely validating a torn read. This is the textbook
+        // seqlock writer-enter construction (the exit-side Release at write_unlock
+        // orders data writes before going even, but cannot cover the entry side).
+        std::sync::atomic::fence(Ordering::Release);
     }
 
     /// Release the write lock.
@@ -111,5 +120,64 @@ impl ShmSeqLock {
 
         // Release the spinlock
         unsafe { &*self.write_lock_ptr }.store(0, Ordering::Release);
+    }
+}
+
+/// Loom model of the seqlock's reader/writer memory ordering (issue #40).
+///
+/// The real `ShmSeqLock` reads/writes atomics through raw mmap pointers, which loom
+/// cannot track, so the *algorithm* is replicated here with loom atomics. The orderings
+/// mirror the real code exactly: writer goes odd (Release store) + Release fence, mutates
+/// data, goes even (Release store); reader loads seq (Acquire), reads data, Acquire fence,
+/// re-loads seq, and only trusts the data if the seq is unchanged and even.
+///
+/// Run with: `RUSTFLAGS="--cfg loom" cargo test --lib seqlock_ordering`
+///
+/// Deleting the `fence(Release)` below makes loom find an execution where a reader
+/// validates a torn read (one data word from the old write, one from the new) — the #40
+/// bug. With the fence, no such execution exists.
+#[cfg(loom)]
+mod loom_tests {
+    use loom::sync::atomic::{fence, AtomicU64, Ordering};
+    use loom::sync::Arc;
+    use loom::thread;
+
+    #[test]
+    fn seqlock_ordering_no_torn_validated_read() {
+        loom::model(|| {
+            // `d0`/`d1` are two data words the writer always keeps equal; if a reader
+            // ever validates a read with d0 != d1, it observed a torn write.
+            let seq = Arc::new(AtomicU64::new(0));
+            let d0 = Arc::new(AtomicU64::new(0));
+            let d1 = Arc::new(AtomicU64::new(0));
+
+            let writer = {
+                let (seq, d0, d1) = (seq.clone(), d0.clone(), d1.clone());
+                thread::spawn(move || {
+                    // write_lock: go odd (spinlock omitted — single writer).
+                    let prev = seq.load(Ordering::Relaxed);
+                    seq.store(prev + 1, Ordering::Release);
+                    fence(Ordering::Release); // #40 fix — delete to see loom fail
+                                              // data mutation, kept internally consistent
+                    d0.store(1, Ordering::Relaxed);
+                    d1.store(1, Ordering::Relaxed);
+                    // write_unlock: go even
+                    let prev = seq.load(Ordering::Relaxed);
+                    seq.store(prev + 1, Ordering::Release);
+                })
+            };
+
+            // reader: one optimistic pass (read_begin + read_validate).
+            let s1 = seq.load(Ordering::Acquire);
+            let v0 = d0.load(Ordering::Relaxed);
+            let v1 = d1.load(Ordering::Relaxed);
+            fence(Ordering::Acquire);
+            let s2 = seq.load(Ordering::Relaxed);
+            if s1 & 1 == 0 && s1 == s2 {
+                assert_eq!(v0, v1, "torn read validated as consistent (#40)");
+            }
+
+            writer.join().unwrap();
+        });
     }
 }

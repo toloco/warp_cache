@@ -17,8 +17,13 @@ memmap2 = "0.9"
 libc = "0.2"
 ahash = "0.8"
 
+# Loom is only pulled in for the seqlock memory-ordering model (issue #40), built
+# solely under `RUSTFLAGS="--cfg loom"`. It is absent from normal/release builds and CI.
+[target.'cfg(loom)'.dependencies]
+loom = "0.7"
+
 [lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(Py_GIL_DISABLED)'] }
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(Py_GIL_DISABLED)', 'cfg(loom)'] }
 
 [profile.release]
 lto = "fat"

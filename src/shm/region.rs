@@ -214,12 +214,18 @@ impl ShmRegion {
         if data_path.exists() && lock_path.exists() {
             match Self::open_paths(&data_path, &lock_path) {
                 Ok(region) => {
-                    // Validate parameters match
+                    // Validate parameters match. ttl_nanos is included (#42): TTL
+                    // lives in the shared header and governs expiry for every process
+                    // (shm/mod.rs reads h.ttl_nanos at lookup time), so a process
+                    // opening with a different TTL must recreate rather than silently
+                    // inherit the creator's TTL — same last-writer-wins recreate as the
+                    // other config params.
                     let header = region.header();
                     if header.version == VERSION
                         && header.capacity == capacity
                         && header.max_key_size == max_key_size
                         && header.max_value_size == max_value_size
+                        && header.ttl_nanos == ttl_nanos
                     {
                         return Ok(region);
                     }

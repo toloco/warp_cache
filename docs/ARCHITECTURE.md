@@ -67,7 +67,11 @@ For day-to-day workflow and commands, see [`CLAUDE.md`](../CLAUDE.md) and
 - **Hash table capacity must be power-of-2** — bitmask probing uses
   `hash & (capacity - 1)`. Always use `.next_power_of_two()`.
 - **`#[repr(C)]` struct field ordering** — place u64 fields before u32 to avoid implicit
-  alignment padding; affects `size_of` assertions in `layout.rs`.
+  alignment padding; affects `size_of` assertions in `layout.rs`. Any field the lock-free
+  read path *writes* (currently only `SlotHeader.visited`) must be an atomic type accessed
+  with `Relaxed` — readers touch it without the write lock while writers reuse the slot, so a
+  plain field is a data race (issue #37). `AtomicU64` is layout-identical to `u64`, so this
+  doesn't change the cross-process layout.
 - **Seqlock writer ordering (issue #40).** The writer must publish the odd ("writer active")
   sequence number *before* its data mutations become visible: `write_lock` does the odd store
   then an `atomic::fence(Release)` (a Release store alone orders only *prior* ops). This pairs
@@ -75,16 +79,17 @@ For day-to-day workflow and commands, see [`CLAUDE.md`](../CLAUDE.md) and
   weak-memory hardware a data write can float ahead of the odd publish and a reader can validate
   a torn read against a stale even seq. The ordering is model-checked under `loom` (run
   `RUSTFLAGS="--cfg loom" cargo test --lib seqlock_ordering`; loom is a `cfg(loom)`-only dep).
-  alignment padding; affects `size_of` assertions in `layout.rs`. Any field the lock-free
-  read path *writes* (currently only `SlotHeader.visited`) must be an atomic type accessed
-  with `Relaxed` — readers touch it without the write lock while writers reuse the slot, so a
-  plain field is a data race (issue #37). `AtomicU64` is layout-identical to `u64`, so this
-  doesn't change the cross-process layout.
 - **Cross-process timestamps must use a system-wide clock (issue #32).** `created_at_nanos`
   is written into shared memory by one process and compared against `now` in another, so
   `shm::current_time_nanos` uses `CLOCK_MONOTONIC` (process-independent on Linux, macOS, and
   the BSDs). Never use `std::time::Instant` for shm timestamps — its epoch is per-process, so
   the two bases are unrelated and TTL silently breaks across processes (the original macOS bug).
+- **All behavior-affecting header config gates region reuse (issue #42).** When a process opens
+  an existing shm region, `region.rs::create_or_open` reuses it only if `version`, `capacity`,
+  `max_key_size`, `max_value_size`, **and `ttl_nanos`** all match; any mismatch recreates the
+  region. TTL lives in the shared header and governs expiry for every reader, so a new header
+  field that changes behavior must be added to this reuse check too — otherwise a process opening
+  with a different value silently inherits the creator's, producing config-dependent behavior.
 - **No second shard guard while one is live (reentrancy, issue #30).** A memory-backend
   lookup runs arbitrary Python `__eq__` (via `PyObject_RichCompareBool`) *while a shard guard
   is held*. That `__eq__` can re-enter the same `CachedFunction` (or, on GIL builds, hand off

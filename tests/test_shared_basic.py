@@ -303,6 +303,46 @@ class TestSharedTTL:
         assert fn.cache_info().hits == 1
 
 
+class TestSharedTTLConfigMismatch:
+    """Regression for #42: opening an existing shm region with a different TTL
+    used to silently reuse the creator's region (and its TTL stored in the
+    header), ignoring the second caller's requested TTL. A TTL mismatch must now
+    recreate the region, just like a capacity/key/value-size mismatch."""
+
+    def setup_method(self):
+        _cleanup_shm()
+
+    def teardown_method(self):
+        _cleanup_shm()
+
+    def test_ttl_mismatch_recreates_region(self):
+        import time
+
+        from warp_cache._warp_cache_rs import SharedCachedFunction
+
+        shm_name = "test_ttl_mismatch_42"
+
+        # First constructor fixes the region's TTL to 0.1s.
+        SharedCachedFunction(
+            lambda x: x, 16, ttl=0.1, max_key_size=512, max_value_size=4096, shm_name=shm_name
+        )
+
+        # Second constructor requests ttl=None on the same region. After the fix
+        # the TTL mismatch recreates the region with no TTL; before the fix it
+        # silently reused the first region and honored ttl=0.1.
+        fn_b = SharedCachedFunction(
+            lambda x: x, 16, ttl=None, max_key_size=512, max_value_size=4096, shm_name=shm_name
+        )
+
+        assert fn_b(1) == 1  # miss -> store
+        time.sleep(0.3)  # well past the first constructor's 0.1s TTL
+        assert fn_b(1) == 1  # ttl=None -> still a hit; ttl=0.1 (bug) -> expired miss
+        assert fn_b.cache_info().hits == 1, (
+            "second constructor's ttl=None was ignored — entry expired per the "
+            "first constructor's ttl=0.1 (region was reused, not recreated)"
+        )
+
+
 class TestSharedMemoryBackend:
     """Test backend='memory' vs backend='shared' routing."""
 

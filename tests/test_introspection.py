@@ -23,7 +23,9 @@ from warp_cache import cache
 
 
 def _cleanup_shm():
-    shm_dir = os.path.join(tempfile.gettempdir(), "warp_cache")
+    if not hasattr(os, "getuid"):  # Windows: no shared backend / shm files
+        return
+    shm_dir = os.path.join(tempfile.gettempdir(), f"warp_cache-{os.getuid()}")
     if os.path.isdir(shm_dir):
         for f in glob.glob(os.path.join(shm_dir, "*")):
             with contextlib.suppress(OSError):
@@ -36,9 +38,7 @@ def _cleanup_shm():
         "memory",
         pytest.param(
             "shared",
-            marks=pytest.mark.skipif(
-                sys.platform == "win32", reason="shared memory is Unix-only"
-            ),
+            marks=pytest.mark.skipif(sys.platform == "win32", reason="shared memory is Unix-only"),
         ),
     ],
 )

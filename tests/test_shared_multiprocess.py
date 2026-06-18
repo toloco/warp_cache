@@ -20,20 +20,19 @@ import pytest
 from warp_cache._warp_cache_rs import SharedCachedFunction
 
 
+def _shm_dir():
+    # Must match src/shm/region.rs::shm_dir: per-user dir (#39) — warp_cache-<uid>
+    # under /dev/shm on Linux, $TMPDIR otherwise.
+    base = "/dev/shm" if sys.platform.startswith("linux") else tempfile.gettempdir()
+    return os.path.join(base, f"warp_cache-{os.getuid()}")
+
+
 def _cleanup_shm():
-    tmpdir = tempfile.gettempdir()
-    shm_dir = os.path.join(tmpdir, "warp_cache")
+    shm_dir = _shm_dir()
     if os.path.isdir(shm_dir):
         for f in glob.glob(os.path.join(shm_dir, "*")):
             with contextlib.suppress(OSError):
                 os.unlink(f)
-
-
-def _shm_dir():
-    # Must match src/shm/region.rs::shm_dir: /dev/shm on Linux, $TMPDIR/warp_cache otherwise.
-    if sys.platform.startswith("linux"):
-        return "/dev/shm"
-    return os.path.join(tempfile.gettempdir(), "warp_cache")
 
 
 def _unlink_shm(name):

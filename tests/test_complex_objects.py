@@ -34,7 +34,7 @@ class User:
 
 def _cleanup_shm():
     tmpdir = tempfile.gettempdir()
-    shm_dir = os.path.join(tmpdir, "warp_cache")
+    shm_dir = os.path.join(tmpdir, f"warp_cache-{os.getuid()}")
     if os.path.isdir(shm_dir):
         for f in glob.glob(os.path.join(shm_dir, "*")):
             with contextlib.suppress(OSError):

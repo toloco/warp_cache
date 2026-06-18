@@ -3,6 +3,8 @@
 import contextlib
 import glob
 import os
+import stat
+import sys
 import tempfile
 
 import pytest
@@ -13,7 +15,7 @@ from warp_cache import SharedCacheInfo, cache
 def _cleanup_shm():
     """Remove any leftover shared memory files."""
     tmpdir = tempfile.gettempdir()
-    shm_dir = os.path.join(tmpdir, "warp_cache")
+    shm_dir = os.path.join(tmpdir, f"warp_cache-{os.getuid()}")
     if os.path.isdir(shm_dir):
         for f in glob.glob(os.path.join(shm_dir, "*")):
             with contextlib.suppress(OSError):
@@ -425,3 +427,39 @@ class TestSharedMaxSizeTooLarge:
             @cache(max_size=max_size, backend="shared")
             def fn(x):
                 return x
+
+
+class TestSharedFilePermissions:
+    """Regression for #39: the mmap cache files hold serialized (and possibly
+    pickled) return values, so they must be owner-only (0o600) inside a per-user
+    0o700 directory — not world-readable in a shared dir like /dev/shm, where
+    another local user could read them or pre-create a crafted file."""
+
+    def setup_method(self):
+        _cleanup_shm()
+
+    def teardown_method(self):
+        _cleanup_shm()
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="shared memory is Unix-only")
+    def test_shm_dir_and_files_are_owner_only(self):
+        # Mirror src/shm/region.rs::shm_dir.
+        base = "/dev/shm" if sys.platform.startswith("linux") else tempfile.gettempdir()
+        shm_dir = os.path.join(base, f"warp_cache-{os.getuid()}")
+
+        @cache(max_size=16, backend="shared")
+        def fn(x):
+            return x * 2
+
+        assert fn(1) == 2  # creates the region + files
+
+        # The per-user directory must be private (owner rwx only).
+        dmode = stat.S_IMODE(os.stat(shm_dir).st_mode)
+        assert dmode == 0o700, f"{shm_dir} is {oct(dmode)}, expected 0o700"
+
+        # Every cache file must be owner read/write only — no group/other bits.
+        files = glob.glob(os.path.join(shm_dir, "*"))
+        assert files, "no shm files were created"
+        for f in files:
+            fmode = stat.S_IMODE(os.stat(f).st_mode)
+            assert fmode & 0o077 == 0, f"{f} is group/other-accessible: {oct(fmode)}"

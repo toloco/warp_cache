@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1781774647639,
+  "lastUpdate": 1781776426903,
   "repoUrl": "https://github.com/toloco/warp_cache",
   "entries": {
     "warp_cache benchmarks": [
@@ -1025,6 +1025,120 @@ window.BENCHMARK_DATA = {
           {
             "name": "warp_cache throughput (8 threads) [ubuntu-latest-py3.14]",
             "value": 8449159,
+            "unit": "ops/s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "toloco@gmail.com",
+            "name": "Tolo Palmer",
+            "username": "toloco"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ec9b842f8ac4ec9672cd9902bba291b4a6510285",
+          "message": "fix: preserve introspection metadata + coroutine-function detection (#43, #44) (#81)",
+          "timestamp": "2026-06-18T10:52:34+01:00",
+          "tree_id": "54cea19cc0a83cb8f6d89247a86bc04478502a5f",
+          "url": "https://github.com/toloco/warp_cache/commit/ec9b842f8ac4ec9672cd9902bba291b4a6510285"
+        },
+        "date": 1781776426540,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "warp_cache single-thread throughput (size=1024) [macos-latest-py3.10]",
+            "value": 14967165,
+            "unit": "ops/s"
+          },
+          {
+            "name": "warp_cache throughput (8 threads) [macos-latest-py3.10]",
+            "value": 10299765,
+            "unit": "ops/s"
+          },
+          {
+            "name": "warp_cache single-thread throughput (size=1024) [macos-latest-py3.14]",
+            "value": 9854360,
+            "unit": "ops/s"
+          },
+          {
+            "name": "warp_cache throughput (8 threads) [macos-latest-py3.14]",
+            "value": 4056267,
+            "unit": "ops/s"
+          },
+          {
+            "name": "warp_cache single-thread throughput (size=1024) [ubuntu-24.04-arm-py3.10]",
+            "value": 9925138,
+            "unit": "ops/s"
+          },
+          {
+            "name": "warp_cache throughput (8 threads) [ubuntu-24.04-arm-py3.10]",
+            "value": 7743610,
+            "unit": "ops/s"
+          },
+          {
+            "name": "warp_cache single-thread throughput (size=1024) [ubuntu-24.04-arm-py3.14]",
+            "value": 10226098,
+            "unit": "ops/s"
+          },
+          {
+            "name": "warp_cache throughput (8 threads) [ubuntu-24.04-arm-py3.14]",
+            "value": 8126611,
+            "unit": "ops/s"
+          },
+          {
+            "name": "warp_cache single-thread throughput (size=1024) [ubuntu-latest-py3.10]",
+            "value": 9448995,
+            "unit": "ops/s"
+          },
+          {
+            "name": "warp_cache throughput (8 threads) [ubuntu-latest-py3.10]",
+            "value": 7325032,
+            "unit": "ops/s"
+          },
+          {
+            "name": "warp_cache single-thread throughput (size=1024) [ubuntu-latest-py3.11]",
+            "value": 9943573,
+            "unit": "ops/s"
+          },
+          {
+            "name": "warp_cache throughput (8 threads) [ubuntu-latest-py3.11]",
+            "value": 8005596,
+            "unit": "ops/s"
+          },
+          {
+            "name": "warp_cache single-thread throughput (size=1024) [ubuntu-latest-py3.12]",
+            "value": 9189290,
+            "unit": "ops/s"
+          },
+          {
+            "name": "warp_cache throughput (8 threads) [ubuntu-latest-py3.12]",
+            "value": 7360976,
+            "unit": "ops/s"
+          },
+          {
+            "name": "warp_cache single-thread throughput (size=1024) [ubuntu-latest-py3.13]",
+            "value": 10757075,
+            "unit": "ops/s"
+          },
+          {
+            "name": "warp_cache throughput (8 threads) [ubuntu-latest-py3.13]",
+            "value": 8566068,
+            "unit": "ops/s"
+          },
+          {
+            "name": "warp_cache single-thread throughput (size=1024) [ubuntu-latest-py3.14]",
+            "value": 9982738,
+            "unit": "ops/s"
+          },
+          {
+            "name": "warp_cache throughput (8 threads) [ubuntu-latest-py3.14]",
+            "value": 8022204,
             "unit": "ops/s"
           }
         ]

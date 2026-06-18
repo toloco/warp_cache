@@ -37,7 +37,9 @@ impl SharedCacheInfo {
 ///
 /// Parallel to `CachedFunction` but stores serialized bytes in shared
 /// memory accessible across processes.
-#[pyclass(frozen)]
+// `dict` gives instances a __dict__ so the Python decorator can apply
+// functools.wraps for introspection (#43). See store.rs CachedFunction.
+#[pyclass(frozen, dict)]
 pub struct SharedCachedFunction {
     fn_obj: Py<PyAny>,
     pickle_dumps: Py<PyAny>,

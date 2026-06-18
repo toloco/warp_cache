@@ -493,6 +493,13 @@ impl CachedFunction {
             None => false,
         };
 
+        // A key's __eq__ may have raised during the probe above (RichCompareBool
+        // returned -1, leaving the exception set and the probe reported as a miss).
+        // Surface it instead of recomputing with an exception pending (#36).
+        if let Some(err) = PyErr::take(py) {
+            return Err(err);
+        }
+
         // Cache miss (or reentrant bypass): call the wrapped function (no lock held)
         let result = self.fn_obj.bind(py).call(args, kwargs.as_ref())?.unbind();
 
@@ -529,6 +536,12 @@ impl CachedFunction {
                     }
                     None => true,
                 };
+
+                // The double-check lookup runs __eq__ too; if it raised, propagate
+                // rather than inserting and returning with an exception pending (#36).
+                if let Some(err) = PyErr::take(py) {
+                    return Err(err);
+                }
 
                 if needs_insert {
                     // Remove expired entry from map if present (order cleaned lazily)
@@ -588,6 +601,11 @@ impl CachedFunction {
             }
         }
 
+        // A raising __eq__ during the probe leaves the exception set (#36).
+        if let Some(err) = PyErr::take(py) {
+            return Err(err);
+        }
+
         self.misses.fetch_add(1, Ordering::Relaxed);
         Ok(None)
     }
@@ -621,6 +639,11 @@ impl CachedFunction {
                 self.hits.fetch_add(1, Ordering::Relaxed);
                 return Ok((true, val));
             }
+        }
+
+        // A raising __eq__ during the probe leaves the exception set (#36).
+        if let Some(err) = PyErr::take(py) {
+            return Err(err);
         }
 
         self.misses.fetch_add(1, Ordering::Relaxed);

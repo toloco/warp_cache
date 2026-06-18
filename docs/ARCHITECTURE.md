@@ -88,3 +88,10 @@ For day-to-day workflow and commands, see [`CLAUDE.md`](../CLAUDE.md) and
   so recursive `@cache` functions still cache. GIL builds use a single GIL-serialized flag;
   free-threaded builds use a per-thread set of active function addresses. The shared backend is
   unaffected (key comparison is by serialized bytes, never Python `__eq__`).
+- **A raising `__eq__` must propagate, not be swallowed (issue #36).** `PyObject_RichCompareBool`
+  returns -1 with a Python exception set when a key's `__eq__` raises. `key.rs::rich_compare_eq`
+  reports -1 as "not equal" (so hashbrown stops probing) but leaves the exception set, and every
+  memory-backend lookup site (`__call__` read + write-double-check, `get`, `_probe`) calls
+  `PyErr::take` after the lookup and returns the error instead of recomputing / returning `Ok`
+  with an exception pending (which PyO3 turns into a masking `SystemError`). Any new lookup site
+  that can run `__eq__` must do the same check.

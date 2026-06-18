@@ -51,10 +51,7 @@ impl PartialEq for CacheKey {
         // serializes that via its reentrancy guard (try_enter, see issue #30), so
         // no aliasing/reentrant shard guard is taken during this comparison.
         // This is the same direct C API call that lru_cache uses.
-        unsafe {
-            ffi::PyObject_RichCompareBool(self.key_obj.as_ptr(), other.key_obj.as_ptr(), ffi::Py_EQ)
-                == 1
-        }
+        unsafe { rich_compare_eq(self.key_obj.as_ptr(), other.key_obj.as_ptr()) }
     }
 }
 
@@ -99,6 +96,31 @@ impl hashbrown::Equivalent<CacheKey> for BorrowedArgs {
         // call stack) and `key.key_obj` is an owned reference in the map. The
         // arbitrary Python __eq__ this runs may re-enter; CachedFunction's
         // reentrancy guard prevents a second, aliasing shard guard (issue #30).
-        unsafe { ffi::PyObject_RichCompareBool(self.ptr, key.key_obj.as_ptr(), ffi::Py_EQ) == 1 }
+        unsafe { rich_compare_eq(self.ptr, key.key_obj.as_ptr()) }
     }
+}
+
+/// `a == b` via Python's rich comparison, for use from `PartialEq`/`Equivalent`
+/// (which can't return `Result`).
+///
+/// `PyObject_RichCompareBool` returns -1 and leaves a Python exception set when a
+/// key's `__eq__` raises. We must NOT map that to `true`/`false` and silently drop
+/// the exception (issue #36): callers fetch the pending exception after the lookup
+/// and propagate it. Here, -1 is reported as "not equal" so hashbrown stops at this
+/// slot, with the exception left set for the caller.
+///
+/// If an exception is already pending (an earlier comparison in the same lookup
+/// raised), we return `false` without calling into Python again — re-entering the
+/// interpreter with a live exception would clobber the original error.
+///
+/// # Safety
+/// Both pointers must be valid live Python objects and the GIL must be held.
+#[inline(always)]
+unsafe fn rich_compare_eq(a: *mut ffi::PyObject, b: *mut ffi::PyObject) -> bool {
+    if !ffi::PyErr_Occurred().is_null() {
+        return false;
+    }
+    // 1 = equal; 0 = not equal; -1 = __eq__ raised (exception now set) — the latter
+    // two are both "not equal" for the probe, but -1 leaves the error for the caller.
+    ffi::PyObject_RichCompareBool(a, b, ffi::Py_EQ) == 1
 }

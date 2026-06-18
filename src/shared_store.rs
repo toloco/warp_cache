@@ -67,6 +67,17 @@ impl SharedCachedFunction {
                 "max_size must be >= 1 for the shared backend",
             ));
         }
+        // The hash table is sized at 2x capacity rounded up to a power of two, which
+        // must fit in u32 — so capacity itself must be <= 2^30 (#41). Reject larger
+        // values here, before the `as u32` cast below silently truncates a usize that
+        // doesn't fit (e.g. 2^32 -> a tiny cache) and before region.rs overflows
+        // `capacity * 2` (panic in debug, 1-bucket table in release).
+        const MAX_SHARED_MAX_SIZE: usize = 1 << 30;
+        if max_size > MAX_SHARED_MAX_SIZE {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "max_size must be <= {MAX_SHARED_MAX_SIZE} for the shared backend (got {max_size})"
+            )));
+        }
 
         let pickle = py.import("pickle")?;
         let pickle_dumps = pickle.getattr("dumps")?.unbind();

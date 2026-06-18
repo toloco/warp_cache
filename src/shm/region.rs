@@ -54,8 +54,20 @@ impl ShmRegion {
             fs::create_dir_all(&dir)?;
         }
 
-        // Hash table must be power-of-2 for bitmask probing
-        let ht_capacity = (capacity * 2).next_power_of_two();
+        // Hash table must be power-of-2 for bitmask probing. `capacity * 2` and its
+        // next-power-of-two must both fit in u32, or the table is silently mis-sized
+        // (overflow panics in debug; in release `capacity * 2` wraps and rounds down to
+        // a 1-bucket table that drops inserts). Reject at the boundary, like capacity==0
+        // above, so the region can never be built mis-sized regardless of caller (#41).
+        let ht_capacity = capacity
+            .checked_mul(2)
+            .and_then(u32::checked_next_power_of_two)
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "shared cache capacity (max_size) too large: 2x hash table exceeds u32",
+                )
+            })?;
         let total_size = layout::region_size(capacity, ht_capacity, slot_size);
 
         let data_path = dir.join(format!("{name}.data"));

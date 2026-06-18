@@ -4,6 +4,7 @@
 /// cache: header + lock + hash table + slab arena.
 use std::fs;
 use std::io;
+use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use memmap2::MmapMut;
@@ -11,14 +12,61 @@ use memmap2::MmapMut;
 use super::layout::{self, Bucket, Header, SlotHeader, BUCKET_EMPTY, MAGIC, SLOT_NONE, VERSION};
 use super::lock::{ShmSeqLock, LOCK_SIZE};
 
-/// Where to store the mmap files.
+/// File mode for the cache files: owner read/write only. They hold serialized
+/// (possibly pickled) return values, so no group/other access (#39).
+const FILE_MODE: u32 = 0o600;
+
+/// Current real user id.
+fn current_uid() -> u32 {
+    // SAFETY: getuid() always succeeds and is thread-safe.
+    unsafe { libc::getuid() }
+}
+
+/// Per-user directory holding the mmap cache files.
+///
+/// The files contain serialized (and possibly pickled) return values, so they
+/// must not be readable or pre-creatable by other local users (#39). On Linux the
+/// parent is the world-writable, sticky `/dev/shm`, so the directory name is scoped
+/// to the uid and created `0o700` (see `ensure_secure_dir`); on macOS/other `$TMPDIR`
+/// is already per-user, but we keep the same layout for defense in depth.
 fn shm_dir() -> PathBuf {
-    if cfg!(target_os = "linux") {
+    let base = if cfg!(target_os = "linux") {
         PathBuf::from("/dev/shm")
     } else {
-        // macOS and other Unix: use TMPDIR
-        std::env::temp_dir().join("warp_cache")
+        std::env::temp_dir()
+    };
+    base.join(format!("warp_cache-{}", current_uid()))
+}
+
+/// Create the per-user shm directory as `0o700`, or — if it already exists — verify
+/// it is a directory we own with no group/other access. This refuses to use a
+/// directory a hostile local user pre-created on a shared parent like `/dev/shm`,
+/// which would otherwise let them read or tamper with the cache files (#39).
+fn ensure_secure_dir(dir: &Path) -> io::Result<()> {
+    match fs::DirBuilder::new().mode(0o700).create(dir) {
+        Ok(()) => return Ok(()),
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
+        Err(e) => return Err(e),
     }
+    // symlink_metadata (not metadata): a symlink must not redirect us elsewhere.
+    let meta = fs::symlink_metadata(dir)?;
+    if !meta.file_type().is_dir() {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "shm path exists but is not a directory",
+        ));
+    }
+    if meta.uid() != current_uid() {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "shm directory is owned by another user",
+        ));
+    }
+    // We own it — tighten perms if a previous run (or anyone) left it group/other-accessible.
+    if meta.permissions().mode() & 0o077 != 0 {
+        fs::set_permissions(dir, fs::Permissions::from_mode(0o700))?;
+    }
+    Ok(())
 }
 
 /// The full shared-memory region, owning the mmap handle and providing
@@ -50,9 +98,7 @@ impl ShmRegion {
         }
 
         let dir = shm_dir();
-        if !dir.exists() {
-            fs::create_dir_all(&dir)?;
-        }
+        ensure_secure_dir(&dir)?;
 
         // Hash table must be power-of-2 for bitmask probing. `capacity * 2` and its
         // next-power-of-two must both fit in u32, or the table is silently mis-sized
@@ -73,21 +119,23 @@ impl ShmRegion {
         let data_path = dir.join(format!("{name}.data"));
         let lock_path = dir.join(format!("{name}.lock"));
 
-        // Create or truncate the data file
+        // Create or truncate the data file (owner-only, #39)
         let data_file = fs::OpenOptions::new()
             .read(true)
             .write(true)
             .create(true)
             .truncate(true)
+            .mode(FILE_MODE)
             .open(&data_path)?;
         data_file.set_len(total_size as u64)?;
 
-        // Create or truncate the lock file
+        // Create or truncate the lock file (owner-only, #39)
         let lock_file = fs::OpenOptions::new()
             .read(true)
             .write(true)
             .create(true)
             .truncate(true)
+            .mode(FILE_MODE)
             .open(&lock_path)?;
         lock_file.set_len(LOCK_SIZE as u64)?;
 
@@ -189,9 +237,7 @@ impl ShmRegion {
         ttl_nanos: u64,
     ) -> io::Result<Self> {
         let dir = shm_dir();
-        if !dir.exists() {
-            fs::create_dir_all(&dir)?;
-        }
+        ensure_secure_dir(&dir)?;
         let data_path = dir.join(format!("{name}.data"));
         let lock_path = dir.join(format!("{name}.lock"));
         let init_path = dir.join(format!("{name}.init"));
@@ -208,6 +254,7 @@ impl ShmRegion {
             .write(true)
             .create(true)
             .truncate(false) // never truncate — it's purely an advisory lock file
+            .mode(FILE_MODE) // owner-only (#39)
             .open(&init_path)?;
         init_file.lock()?;
 

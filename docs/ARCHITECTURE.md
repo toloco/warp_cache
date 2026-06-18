@@ -90,7 +90,12 @@ For day-to-day workflow and commands, see [`CLAUDE.md`](../CLAUDE.md) and
   region. TTL lives in the shared header and governs expiry for every reader, so a new header
   field that changes behavior must be added to this reuse check too — otherwise a process opening
   with a different value silently inherits the creator's, producing config-dependent behavior.
-- **No second shard guard while one is live (reentrancy, issue #30).** A memory-backend
+- **Shm files are owner-private (issue #39).** The mmap files hold serialized (and possibly
+  pickled) return values, so they live in a per-user directory `warp_cache-<uid>` created `0o700`
+  (under `/dev/shm` on Linux, `$TMPDIR` otherwise) and are created `0o600`. On a shared parent
+  like `/dev/shm`, `ensure_secure_dir` refuses a pre-existing dir not owned by us or with
+  group/other access, so a co-located user can't read the cache or pre-create a crafted file that
+  the victim would `pickle.loads`. Any new shm file-creation site must set `.mode(0o600)`. A memory-backend
   lookup runs arbitrary Python `__eq__` (via `PyObject_RichCompareBool`) *while a shard guard
   is held*. That `__eq__` can re-enter the same `CachedFunction` (or, on GIL builds, hand off
   the GIL to another thread that calls in) and take a second, conflicting guard — aliasing

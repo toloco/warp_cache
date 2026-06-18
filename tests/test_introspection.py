@@ -14,6 +14,7 @@ import contextlib
 import glob
 import inspect
 import os
+import sys
 import tempfile
 
 import pytest
@@ -29,7 +30,18 @@ def _cleanup_shm():
                 os.unlink(f)
 
 
-@pytest.mark.parametrize("backend", ["memory", "shared"])
+@pytest.mark.parametrize(
+    "backend",
+    [
+        "memory",
+        pytest.param(
+            "shared",
+            marks=pytest.mark.skipif(
+                sys.platform == "win32", reason="shared memory is Unix-only"
+            ),
+        ),
+    ],
+)
 def test_sync_preserves_introspection(backend):
     """#43: name/qualname/module/doc/__wrapped__ and a resolvable signature."""
     _cleanup_shm()

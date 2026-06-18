@@ -33,7 +33,8 @@ For day-to-day workflow and commands, see [`CLAUDE.md`](../CLAUDE.md) and
   - `layout.rs` — Header + SlotHeader structs, memory offsets.
   - `region.rs` — `ShmRegion`: mmap file management (`$TMPDIR/warp_cache/{name}.data` +
     `{name}.lock`).
-  - `lock.rs` — `ShmSeqLock`: seqlock (optimistic reads + TTAS spinlock) in shared memory.
+  - `lock.rs` — `ShmSeqLock`: seqlock (optimistic reads + PID-owner TTAS spinlock with
+    dead-owner recovery + RAII `WriteGuard`, issue #38) in shared memory.
   - `hashtable.rs` — Open-addressing with linear probing (power-of-2 capacity, bitmask).
   - `ordering.rs` — SIEVE eviction: intrusive linked list + `sieve_evict()` hand scan.
 
@@ -79,6 +80,19 @@ For day-to-day workflow and commands, see [`CLAUDE.md`](../CLAUDE.md) and
   weak-memory hardware a data write can float ahead of the odd publish and a reader can validate
   a torn read against a stale even seq. The ordering is model-checked under `loom` (run
   `RUSTFLAGS="--cfg loom" cargo test --lib seqlock_ordering`; loom is a `cfg(loom)`-only dep).
+- **Writer death-handling (issue #38).** The writer word stores the owner's **PID** (0 = free),
+  not a bare 0/1 flag. A process killed (SIGKILL/OOM/crash) mid-critical-section would otherwise
+  wedge everyone forever — `write_lock` spinning on the flag and `read_begin` spinning for an even
+  `seq`. So a waiter that spins past `RECOVER_SPINS` on a *continuously held* lock probes the owner
+  with `kill(pid, 0)`; on `ESRCH` it recovers by stamping **its own** PID (keeps the lock held — no
+  writer can enter against a stale odd seq — and stays probeable, so a recoverer that itself dies is
+  recovered in turn rather than leaving a terminal sentinel), forcing `seq` even, then releasing.
+  In-process panics are covered separately: `write_lock` returns a `WriteGuard` whose `Drop`
+  releases the lock and restores `seq` parity while unwinding, so a panic across the PyO3 boundary
+  can't leak the lock. Recovery restores **liveness only** — a writer killed mid-`insert` can leave
+  the entry/free-list half-written (no WAL); that is the accepted trade-off over a permanent
+  deadlock. `owner_is_dead` must never probe a value mapping to a non-positive `pid_t` (`kill(0/-1)`
+  hits process groups), so it rejects `0` and anything `> i32::MAX`.
 - **Cross-process timestamps must use a system-wide clock (issue #32).** `created_at_nanos`
   is written into shared memory by one process and compared against `now` in another, so
   `shm::current_time_nanos` uses `CLOCK_MONOTONIC` (process-independent on Linux, macOS, and

@@ -284,27 +284,30 @@ impl ShmCache {
                 ShmGetResult::Miss
             }
             OptimisticResult::Expired { slot_index } => {
-                // Need write lock to remove the expired entry
-                lock.write_lock();
-                unsafe {
-                    // Re-verify the slot is still the same expired entry
-                    let slot_size = self.header().slot_size;
-                    let slot_ptr = self
-                        .slab_base()
-                        .add(slot_index as usize * slot_size as usize);
-                    let slot = &*(slot_ptr as *const SlotHeader);
-                    if slot.occupied != 0 && slot.key_hash == key_hash {
-                        // Re-read key bytes to pass to remove_slot
-                        let key_len = slot.key_len as usize;
-                        let stored_key =
-                            std::slice::from_raw_parts(slot_ptr.add(SLOT_HEADER_SIZE), key_len);
-                        // Only remove if key actually matches (slot could have been reused)
-                        if stored_key == key_bytes {
-                            self.remove_slot(slot_index, key_bytes);
+                // Need write lock to remove the expired entry. The guard releases
+                // it (and restores seq parity) even if the body panics (#38); the
+                // block scopes the release ahead of the stats bump below.
+                {
+                    let _guard = lock.write_lock();
+                    unsafe {
+                        // Re-verify the slot is still the same expired entry
+                        let slot_size = self.header().slot_size;
+                        let slot_ptr = self
+                            .slab_base()
+                            .add(slot_index as usize * slot_size as usize);
+                        let slot = &*(slot_ptr as *const SlotHeader);
+                        if slot.occupied != 0 && slot.key_hash == key_hash {
+                            // Re-read key bytes to pass to remove_slot
+                            let key_len = slot.key_len as usize;
+                            let stored_key =
+                                std::slice::from_raw_parts(slot_ptr.add(SLOT_HEADER_SIZE), key_len);
+                            // Only remove if key matches (slot could have been reused)
+                            if stored_key == key_bytes {
+                                self.remove_slot(slot_index, key_bytes);
+                            }
                         }
                     }
                 }
-                lock.write_unlock();
 
                 self.atomic_misses().fetch_add(1, AtomicOrdering::Relaxed);
                 ShmGetResult::Miss
@@ -315,9 +318,10 @@ impl ShmCache {
     /// Insert a key-value pair. Evicts if necessary.
     pub fn insert(&self, key_hash: u64, key_bytes: &[u8], value_bytes: &[u8]) {
         let lock = self.lock();
-        lock.write_lock();
+        // _guard releases the lock on scope exit — and on an unwinding panic in
+        // insert_inner (e.g. a serde/pointer-math bug), so the cache can't wedge (#38).
+        let _guard = lock.write_lock();
         unsafe { self.insert_inner(key_hash, key_bytes, value_bytes) };
-        lock.write_unlock();
     }
 
     unsafe fn insert_inner(&self, key_hash: u64, key_bytes: &[u8], value_bytes: &[u8]) {
@@ -464,9 +468,8 @@ impl ShmCache {
     /// Clear the entire cache.
     pub fn clear(&self) {
         let lock = self.lock();
-        lock.write_lock();
+        let _guard = lock.write_lock(); // released on scope exit / panic (#38)
         unsafe { self.clear_inner() };
-        lock.write_unlock();
     }
 
     unsafe fn clear_inner(&self) {

@@ -358,3 +358,30 @@ class TestSharedMaxSizeZero:
 
         assert fn(3) == 6
         assert fn(3) == 6
+
+
+class TestSharedMaxSizeTooLarge:
+    """Regression for #41: max_size whose 2x hash table overflows u32 used to
+    panic across FFI (debug) or silently build a 1-bucket table that drops every
+    insert after the first (release). Both must now be a clean ValueError."""
+
+    def setup_method(self):
+        _cleanup_shm()
+
+    def teardown_method(self):
+        _cleanup_shm()
+
+    @pytest.mark.parametrize(
+        "max_size",
+        [
+            2**31,  # capacity*2 overflows u32 (the headline trigger)
+            2**32,  # also exercises the usize->u32 truncation path (would wrap to 0)
+            2**30 + 1,  # just past the largest table that fits in u32
+        ],
+    )
+    def test_oversized_max_size_raises(self, max_size):
+        with pytest.raises(ValueError, match="max_size must be <="):
+
+            @cache(max_size=max_size, backend="shared")
+            def fn(x):
+                return x
